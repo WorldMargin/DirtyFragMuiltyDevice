@@ -17,26 +17,6 @@ typedef int  (*kern_path_t)(const char *, unsigned int, struct path *);
 typedef int  (*invalidate_t)(struct address_space *);
 typedef void (*path_put_t)(const struct path *);
 
-static kern_path_t  kern_path_fn;
-static invalidate_t invalidate_fn;
-static path_put_t   path_put_fn;
-
-static void drop_path_cache(const char *path)
-{
-    struct path p;
-    if (!kern_path_fn || !invalidate_fn || !path_put_fn) {
-        pr_err("dfroot: drop_path_cache: symbols missing\n");
-        return;
-    }
-    if (kern_path_fn(path, LOOKUP_FOLLOW, &p)) {
-        pr_err("dfroot: drop_path_cache: kern_path failed for %s\n", path);
-        return;
-    }
-    invalidate_fn(p.dentry->d_inode->i_mapping);
-    path_put_fn(&p);
-    pr_info("dfroot: cleared page cache for %s\n", path);
-}
-
 static int defex_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
     (void)p;
@@ -48,6 +28,10 @@ static int defex_pre_handler(struct kprobe *p, struct pt_regs *regs)
 static int __nocfi __init dfroot_init(void)
 {
     kallsyms_lookup_name_t get_addr;
+    kern_path_t  kern_path_fn;
+    invalidate_t invalidate_fn;
+    path_put_t   path_put_fn;
+    struct path  p;
     umh_setup_t umh_setup;
     umh_exec_t  umh_exec;
     bool *selinux_state;
@@ -76,7 +60,16 @@ static int __nocfi __init dfroot_init(void)
     kern_path_fn  = (kern_path_t) get_addr("kern_path");
     invalidate_fn = (invalidate_t)get_addr("invalidate_inode_pages2");
     path_put_fn   = (path_put_t)  get_addr("path_put");
-    drop_path_cache("/apex/com.android.runtime/bin/crash_dump64");
+    if (!kern_path_fn || !invalidate_fn || !path_put_fn) {
+        pr_err("dfroot: cache drop symbols missing\n");
+    } else if (kern_path_fn("/apex/com.android.runtime/bin/crash_dump64",
+                            LOOKUP_FOLLOW, &p)) {
+        pr_err("dfroot: kern_path failed for crash_dump64\n");
+    } else {
+        invalidate_fn(p.dentry->d_inode->i_mapping);
+        path_put_fn(&p);
+        pr_info("dfroot: cleared page cache for crash_dump64\n");
+    }
 
     selinux_state = (bool *)get_addr("selinux_state");
     if (!selinux_state) {
