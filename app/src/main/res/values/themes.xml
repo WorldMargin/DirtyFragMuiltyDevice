@@ -11,6 +11,51 @@
         <item name="colorSurfaceContainerHigh">@color/black</item>
         <item name="colorSurfaceContainerHighest">@color/black</item>
         <item name="colorOutline">#FFE8E8E8</item>
+        <!-- Every press highlight in the app: 30% mid-grey, never white.
+             Covers the Material Run pill and anything else that pulls the
+             ripple from the theme; the explicit ripple drawables use the
+             same #4D6E6E6E. -->
+        <item name="colorControlHighlight">#4D6E6E6E</item>
+        <!-- NO PURPLE, NOT EVEN FOR A FRAME. The Material3 DynamicColors parent
+             pulls the wallpaper palette, and every attribute we leave unset
+             (starting window, system splash, selection highlight, switch
+             accent) comes back tinted - that was the purple flash for a moment
+             on cold start. Pin the surfaces and accents to neutral grey.
+             android:colorBackground is the one the starting window and the
+             splash fall back to, so it is the important line here. -->
+        <item name="android:colorBackground">@color/black</item>
+        <item name="colorPrimary">#FFB0B0B0</item>
+        <item name="colorOnPrimary">#FF141414</item>
+        <item name="colorPrimaryContainer">#FF2E2E2E</item>
+        <item name="colorOnPrimaryContainer">#FFE0E0E0</item>
+        <item name="colorSecondary">#FFB0B0B0</item>
+        <item name="colorOnSecondary">#FF141414</item>
+        <item name="colorSecondaryContainer">#FF2E2E2E</item>
+        <item name="colorOnSecondaryContainer">#FFE0E0E0</item>
+        <item name="colorTertiary">#FFB0B0B0</item>
+        <item name="colorOnTertiary">#FF141414</item>
+        <item name="colorTertiaryContainer">#FF2E2E2E</item>
+        <item name="colorOnTertiaryContainer">#FFE0E0E0</item>
+        <item name="colorSurfaceVariant">#FF2E2E2E</item>
+        <item name="colorSurfaceDim">#FF141414</item>
+        <item name="colorSurfaceBright">#FF2E2E2E</item>
+        <item name="colorSurfaceContainerLowest">#FF000000</item>
+        <item name="colorOutlineVariant">#FF3A3A3A</item>
+        <item name="colorOnBackground">#FFE0E0E0</item>
+        <item name="colorOnSurface">#FFE0E0E0</item>
+        <item name="colorOnSurfaceVariant">#FFCAC4C4</item>
+        <item name="colorControlActivated">#FFC9C9C9</item>
+        <item name="colorAccent">#FFC9C9C9</item>
+        <item name="android:colorAccent">#FFC9C9C9</item>
+        <item name="android:textColorHighlight">#4D6E6E6E</item>
+        <!-- System splash screen. minSdk is 32, so these live here and NOT in a
+             values-v31 copy: that copy used to redefine this whole theme, which
+             silently overrode everything else on every supported device.
+             Background is BLACK, not transparent - a transparent splash lets
+             OneUI fall back to its own (purple-tinted) surface. The animated
+             icon is a transparent colour so no icon is shown at all. -->
+        <item name="android:windowSplashScreenBackground">@color/black</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
         <!-- Card-styled popup menu (rounded #1C1C1C background). -->
         <item name="popupMenuStyle">@style/DF_PopupMenu</item>
         <item name="android:popupMenuStyle">@style/DF_PopupMenu</item>
