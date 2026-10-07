@@ -34,3 +34,6 @@ app/src/main/jni/ko/*.ko
 
 # stale APK copies dropped at the repo root by hand
 /dirtyfrag.apk
+
+# staged release APK for the GitHub release asset
+/release/
