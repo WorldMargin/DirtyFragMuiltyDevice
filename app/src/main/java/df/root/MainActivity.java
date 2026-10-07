@@ -55,6 +55,13 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private int cleanupSteps;
     private float seg1;
     private float pillPercent = 0.48f;
+    /** SU-manager launcher geometry: a 54dp circle with a 12dp gap to the Run
+     *  pill while a run is in flight; once root is verified the circle morphs
+     *  into a pill as wide as the shrunken Run pill (setCompactButton +
+     *  morphKsuToPill). Matches the share circle's 54dp on the left. */
+    private static final float KSU_CIRCLE_DP = 54f;
+    private static final float KSU_GAP_DP = 12f;
+    private android.animation.ValueAnimator ksuMorph;
     private VersionPillSpan pillSpan;
     private TextView titleView;
     private boolean updateAvailable;
@@ -210,21 +217,53 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     }
 
     /** Visibility of log / share button / progress bar, composed from the
-     *  advanced-log setting and whether any run data exists. */
+     *  advanced-log setting and whether any run data exists. The log block
+     *  needs the switch; the share circle does not - a finished run can always
+     *  be saved. */
     private void updateLogVisibility() {
         boolean hasRun = logBuffer.length() > 0
                 || (lastLogFile != null && lastLogFile.exists());
         boolean showLog = advancedLog && hasRun;
         binding.outputScroll.setVisibility(showLog ? View.VISIBLE : View.GONE);
-        binding.btnShareLog.setVisibility(showLog ? View.VISIBLE : View.GONE);
+        // Share circle: any FINISHED run, advanced log on or off. Still hidden
+        // while a run is in flight (the log is being written) and shown for a
+        // saved log from a previous boot, which is finished by definition.
+        setShareButtonVisible(hasRun && !running);
         // Progress bar is the simple status: always visible.
     }
 
-    /** "=== setup ===" -> "SETUP"; "=== exploit failed: x ===" -> "EXPLOIT FAILED: X". */
+    /** Pop the share circle in/out with the same animation the KernelSU
+     *  launcher circle uses (fade + 0.6x -> 1x scale, 150ms delay). */
+    private void setShareButtonVisible(boolean show) {
+        android.widget.ImageButton b = binding.btnShareLog;
+        boolean wasVisible = b.getVisibility() == View.VISIBLE
+                && b.getAlpha() > 0.99f;
+        if (show && !wasVisible) {
+            b.setVisibility(View.VISIBLE);
+            b.setAlpha(0f);
+            b.setScaleX(0.6f);
+            b.setScaleY(0.6f);
+            b.postDelayed(() -> b.animate()
+                    .alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start(), 150);
+        } else if (show) {
+            b.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(120).start();
+        } else if (wasVisible) {
+            b.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f).setDuration(200)
+                    .withEndAction(() -> b.setVisibility(View.GONE)).start();
+        }
+    }
+
+    /** "=== setup ===" -> "SETUP"; "=== exploit (patching files) ===" ->
+     *  "PATCHING"; "=== exploit failed: x ===" -> "EXPLOIT FAILED: X". */
     private static String stripHeader(String t) {
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("^===\\s*(.*?)\\s*===$").matcher(t);
-        return m.matches() ? m.group(1).toUpperCase() : t;
+        if (!m.matches()) return t;
+        String h = m.group(1).toUpperCase();
+        // The native binary still prints "=== exploit (patching files) ===";
+        // the UI shows the short form.
+        if (h.equals("EXPLOIT (PATCHING FILES)")) return "PATCHING";
+        return h;
     }
 
     /** Short firmware token from the build display string, e.g. "S931BXXU1AYB2"
@@ -243,7 +282,8 @@ public class MainActivity extends AppCompatActivity implements IReporter {
 
     /** Header lines render big, white and bold; the rest is dimmed. */
     private boolean isHeader(String line) {
-        return line.equals("SETUP") || line.equals("EXPLOIT (PATCHING FILES)")
+        return line.equals("SETUP") || line.equals("PATCHING")
+                || line.equals("EXPLOIT (PATCHING FILES)")
                 || line.equals("INIT") || line.equals("CLEANUP")
                 || line.startsWith("EXPLOIT FAILED")
                 || line.equals(fwToken());
@@ -894,7 +934,11 @@ public class MainActivity extends AppCompatActivity implements IReporter {
 
         int[] loc = new int[2];
         binding.cardSuManager.getLocationOnScreen(loc);
-        int x = loc[0] + (int) (16 * md);
+        // Centered, NOT card-anchored: the popup is exactly card-wide and the
+        // card sits 16dp from each edge, so half the leftover IS the card's own
+        // margin. Anchoring to the card's left + 16dp pushed the popup 16dp
+        // right, which read as off-centre and clipped its right edge.
+        int x = (getResources().getDisplayMetrics().widthPixels - pw_w) / 2;
         int y = loc[1] + binding.cardSuManager.getHeight() + (int) (4 * md);
         binding.dimOverlay.setVisibility(View.VISIBLE);
         binding.dimOverlay.setAlpha(0f);
@@ -1046,12 +1090,12 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         // Fresh pill: 48% wide starting at the 26% guideline → right edge at
         // 74%. Compact: pill + 12dp gap + 54dp circle must occupy the same
         // 48% total (left edge pinned), so pill = 48% - extras.
+        float parentW = ((View) binding.btnRun.getParent()).getWidth();
+        if (parentW <= 0) parentW = getResources().getDisplayMetrics().widthPixels;
+        float density = getResources().getDisplayMetrics().density;
         float target = 0.48f;
         if (compact) {
-            float parentW = ((View) binding.btnRun.getParent()).getWidth();
-            if (parentW <= 0) parentW = getResources().getDisplayMetrics().widthPixels;
-            float density = getResources().getDisplayMetrics().density;
-            float extrasPx = (12f + 54f) * density;
+            float extrasPx = (KSU_GAP_DP + KSU_CIRCLE_DP) * density;
             target = Math.max(0.20f, 0.48f - extrasPx / parentW);
         }
         android.animation.ValueAnimator a =
@@ -1066,28 +1110,50 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             binding.btnRun.setLayoutParams(lp);
         });
         a.start();
+        // The launcher pill ends up exactly as wide as the shrunken Run pill
+        // (measured off the user's mockups: 331 vs 332 px on the S25), which is
+        // what fills the old 100dp right-hand deadzone and mirrors the share
+        // circle on the left.
+        int ksuPillPx = (int) (target * parentW);
+        int ksuCirclePx = (int) (KSU_CIRCLE_DP * density);
         binding.btnKsu.setEnabled(ksuLit);
         boolean wasVisible = binding.btnKsu.getVisibility() == View.VISIBLE
                 && binding.btnKsu.getAlpha() > 0.99f;
         binding.btnKsu.setBackgroundTintList(ColorStateList.valueOf(
                 ksuLit ? 0xFFB0B0B0 : 0xFF1F1F1F));
-        binding.btnKsu.setImageResource(R.drawable.ksu_logo);
+        // Dark ink on the lit pill, mid-grey on the unlit one - same grey as
+        // the share glyph.
+        binding.ksuChevron.setImageTintList(ColorStateList.valueOf(
+                ksuLit ? 0xFF1F1F1F : 0xFF6E6E6E));
         if (compact && !wasVisible) {
-            // First appearance: pop in quickly.
+            // First appearance: pop in as a circle. The morph is chained to the
+            // pop-in's end so the Run pill has already finished shrinking - its
+            // right edge is the launcher's start anchor, so the launcher's left
+            // edge must be stable before we animate the width.
+            setKsuWidth(ksuCirclePx);
+            binding.ksuLabel.setAlpha(0f);
             binding.btnKsu.setVisibility(View.VISIBLE);
             binding.btnKsu.setAlpha(0f);
             binding.btnKsu.setScaleX(0.6f);
             binding.btnKsu.setScaleY(0.6f);
             binding.btnKsu.postDelayed(() -> binding.btnKsu.animate()
                     .alpha(1f).scaleX(1f).scaleY(1f).setDuration(180)
-                    .withEndAction(() -> settleKsuTint(ksuLit)).start(), 150);
+                    .withEndAction(() -> {
+                        settleKsuTint(ksuLit);
+                        morphKsuToPill(ksuLit, ksuPillPx, ksuCirclePx);
+                    }).start(), 150);
         } else if (compact) {
-            // Already visible (state change): stay in place, just recolor.
+            // Already visible (state change): stay in place, recolor + grow.
             settleKsuTint(ksuLit);
+            morphKsuToPill(ksuLit, ksuPillPx, ksuCirclePx);
         } else {
+            binding.ksuLabel.animate().alpha(0f).setDuration(150).start();
             binding.btnKsu.animate().alpha(0f).scaleX(0.6f).scaleY(0.6f)
                     .setDuration(200)
-                    .withEndAction(() -> binding.btnKsu.setVisibility(View.GONE))
+                    .withEndAction(() -> {
+                        binding.btnKsu.setVisibility(View.GONE);
+                        setKsuWidth(ksuCirclePx);
+                    })
                     .start();
         }
     }
@@ -1104,6 +1170,46 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                         mixColor(0xFFB0B0B0, 0xFF9A9A9E,
                                 (float) anim.getAnimatedValue()))));
         g.start();
+    }
+
+    /** Circle -> pill (or back): width only, left edge pinned, 250ms
+     *  Decelerate - the same one-axis / one-side feel as the Run pill's
+     *  shrink. The label fades in as the pill opens up. */
+    private void morphKsuToPill(boolean lit, int pillPx, int circlePx) {
+        int from = binding.btnKsu.getWidth();
+        int to = lit ? pillPx : circlePx;
+        if (from <= 0 || from == to) return;
+        if (ksuMorph != null && ksuMorph.isRunning()) ksuMorph.cancel();
+        ksuMorph = android.animation.ValueAnimator.ofInt(from, to);
+        ksuMorph.setDuration(250);
+        ksuMorph.setInterpolator(
+                new android.view.animation.DecelerateInterpolator());
+        ksuMorph.addUpdateListener(
+                anim -> setKsuWidth((int) anim.getAnimatedValue()));
+        // One final re-layout after the last width frame: the label and the
+        // chevron are positioned by the FrameLayout, and a mid-morph width can
+        // leave them stale (seen on device: the label stayed at the circle's
+        // left edge instead of moving into the pill). ValueAnimator has no
+        // withEndAction - that is ViewPropertyAnimator's API.
+        ksuMorph.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator animation) {
+                binding.btnKsu.requestLayout();
+            }
+        });
+        ksuMorph.start();
+        binding.ksuLabel.animate().alpha(lit ? 1f : 0f)
+                .setStartDelay(lit ? 120 : 0).setDuration(220).start();
+    }
+
+    /** The launcher's animated width. layout_constraintHorizontal_bias="0"
+     *  welds its left edge to the Run pill while the right edge travels. */
+    private void setKsuWidth(int px) {
+        androidx.constraintlayout.widget.ConstraintLayout.LayoutParams lp =
+                (androidx.constraintlayout.widget.ConstraintLayout.LayoutParams)
+                        binding.btnKsu.getLayoutParams();
+        lp.width = px;
+        binding.btnKsu.setLayoutParams(lp);
     }
 
     /** Opens the SU manager that is actually selected - pre-3.2 this walked a

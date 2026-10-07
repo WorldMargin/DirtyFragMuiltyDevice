@@ -208,7 +208,7 @@
                         android:id="@+id/tvRebootDesc"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Soft reboots after root (Use with caution)"
+                        android:text="Soft reboots after root"
                         android:textColor="#FF9E9E9E"
                         android:textSize="12sp" />
 
@@ -328,7 +328,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Shows full log in addition to simple status"
+                    android:text="Shows full scrollable log"
                     android:textColor="#FF9E9E9E"
                     android:textSize="12sp" />
 
@@ -353,6 +353,9 @@
         android:layout_marginTop="12dp"
         android:layout_marginBottom="16dp"
         android:scrollbars="none"
+        android:overScrollMode="never"
+        android:clipToPadding="false"
+        android:paddingBottom="140dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
@@ -367,22 +370,6 @@
             android:textSize="11sp" />
 
     </ScrollView>
-
-    <!-- Share log button: right side, same row as the log's first line -->
-    <com.google.android.material.button.MaterialButton
-        android:id="@+id/btnShareLog"
-        style="@style/Widget.Material3.Button.IconButton"
-        android:layout_width="44dp"
-        android:layout_height="44dp"
-        android:layout_marginEnd="32dp"
-        android:layout_marginTop="12dp"
-        android:contentDescription="Save log to Downloads"
-        app:icon="@drawable/ic_share"
-        app:iconGravity="textStart"
-        app:iconSize="22dp"
-        app:iconTint="#FFC9C9C9"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/cardLog" />
 
     <!-- OneUI-style bottom fade over the log -->
     <df.root.BottomFadeView
@@ -429,7 +416,7 @@
         android:elevation="12dp"
         android:stateListAnimator="@null"
         android:text="Run exploit"
-        android:textSize="16sp"
+        android:textSize="14sp"
         android:backgroundTint="#FF7A7A7A"
         android:textColor="#FFE0E0E0"
         app:layout_constraintBottom_toBottomOf="parent"
@@ -440,26 +427,85 @@
         app:strokeWidth="0.5dp"
         app:strokeColor="#FFA6A6A6" />
 
-    <!-- KSU launcher circle: pops up next to the pill while running/rooted,
-         lights up once root is successful. -->
-    <ImageButton
+    <!-- SU-manager launcher. Circle (54dp, chevron dead-centre) while a run is
+         in flight; once root is verified MainActivity morphs it into a pill the
+         same width as the shrunken Run pill, so the bottom row reads as two
+         equal pills with the share circle mirroring the left edge and the old
+         right-hand deadzone filled. The chevron is pinned 17dp from the right
+         edge = (54-20)/2, which centres it in the circle AND puts it at the
+         pill's end - one drawable, no icon animation. No KSU logo: the manager
+         can be KernelSU, KernelSU-Next, KowSU or anything else that ships
+         libksud.so, so a KernelSU-shaped glyph would be a lie. -->
+    <FrameLayout
         android:id="@+id/btnKsu"
         android:layout_width="54dp"
         android:layout_height="54dp"
         android:layout_marginStart="12dp"
         android:layout_marginBottom="28dp"
-        android:background="@drawable/bg_circle"
+        android:background="@drawable/bg_pill"
         android:backgroundTint="#FF2E2E30"
-        android:contentDescription="Open KernelSU"
+        android:clickable="true"
+        android:contentDescription="Open SU manager"
         android:elevation="12dp"
         android:enabled="false"
-        android:scaleType="centerInside"
-        android:src="@drawable/ksu_logo"
+        android:focusable="true"
         android:visibility="gone"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintHorizontal_bias="0"
-        app:layout_constraintStart_toEndOf="@+id/btnRun" />
+        app:layout_constraintStart_toEndOf="@+id/btnRun">
+
+        <!-- Fades in while the circle opens up; dark ink on the lit pill.
+             Centered in the space left of the chevron (marginEnd clears the
+             chevron), which reads better than hugging the pill's left edge.
+             The morph's end action forces a re-layout so the label actually
+             re-centres as the width animates. Nudge marginEnd to move it. -->
+        <TextView
+            android:id="@+id/ksuLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="22dp"
+            android:alpha="0"
+            android:text="Manager"
+            android:textColor="#FF1F1F1F"
+            android:textSize="14sp" />
+
+        <ImageView
+            android:id="@+id/ksuChevron"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="17dp"
+            android:contentDescription="Open"
+            android:src="@drawable/ic_chevron" />
+
+    </FrameLayout>
+
+    <!-- Share log circle: same 54dp size as the KernelSU launcher, sitting to
+         the LEFT of the run pill (mirroring btnKsu on the right). Dark grey
+         (#1F1F1F, like the Rooted pill / unlit KSU circle) with the glyph in
+         #6E6E6E — the exact colour of the "Rooted" text. padding 0 + center
+         scaleType keep the glyph dead-centre. Hidden until a run has finished;
+         MainActivity.setShareButtonVisible pops it in like btnKsu. -->
+    <ImageButton
+        android:id="@+id/btnShareLog"
+        android:layout_width="54dp"
+        android:layout_height="54dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="28dp"
+        android:background="@drawable/bg_circle_grey_ripple"
+        android:contentDescription="Save log to Downloads"
+        android:elevation="12dp"
+        android:padding="0dp"
+        android:scaleType="center"
+        android:src="@drawable/ic_share"
+        android:tint="#FF6E6E6E"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/btnRun"
+        app:layout_constraintHorizontal_bias="1"
+        app:layout_constraintStart_toStartOf="parent" />
 
     <!-- Dim overlay: darkens the app 50% while the submenu is visible. -->
     <View
@@ -475,3 +521,4 @@
         app:layout_constraintTop_toTopOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
+ 
