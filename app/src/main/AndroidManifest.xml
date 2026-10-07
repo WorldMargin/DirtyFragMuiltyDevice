@@ -12,13 +12,10 @@
     <application
         android:label="DirtyFrag"
         android:allowBackup="false"
-<<<<<<< HEAD
         android:debuggable="true"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-=======
->>>>>>> origin/master
         android:theme="@style/Theme.DirtyFrag">
 
         <activity
