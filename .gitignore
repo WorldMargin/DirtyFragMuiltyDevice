@@ -1,19 +1,33 @@
-.gradle/
+# Gradle build artifacts
+.classpath
 .project
 .settings/
+.gradle/
+*.iml
+.idea/
 build/
 app/build/
 app/.cxx/
-*.apk
+
+# local settings
 local.properties
-*.iml
-.idea/
-dirtyfrag-lkm/*.cmd
-dirtyfrag-lkm/*.o
-dirtyfrag-lkm/*.mod
-dirtyfrag-lkm/*.mod.c
-dirtyfrag-lkm/*.lto.o
-dirtyfrag-lkm/modules.order
-dirtyfrag-lkm/Module.symvers
+signing.properties
+keystore.jks
 app/keystore.jks
 *.log
+apk/
+
+# LKM build artifacts
+lkm/*.cmd
+lkm/*.o
+lkm/*.mod
+lkm/*.mod.c
+lkm/*.lto.o
+lkm/*.lds
+lkm/modules.order
+lkm/Module.symvers
+
+# Generated binaries
+out/
+app/src/main/jni/splicehelper
+app/src/main/jni/ko/*.ko

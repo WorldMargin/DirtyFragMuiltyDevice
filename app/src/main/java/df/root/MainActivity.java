@@ -4,7 +4,9 @@ import android.content.Context;
 import android.content.ComponentName;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -31,6 +33,8 @@ import df.root.databinding.ActivityMainBinding;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
@@ -56,6 +60,18 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private boolean updateAvailable;
     private boolean moduleRefresh;
 
+    /** Device-protected storage context: bootstrap.c reads its prefs from
+     *  /data/user_de/0/df.root/, so every pref the exploit depends on must live
+     *  there, not in credential-protected storage. */
+    private Context mDeCtx;
+    /** Package name of the SU manager whose libksud.so gets staged, or null. */
+    private String suManagerPkg;
+    private CharSequence suManagerLabel;
+    /** A failed run locks the Run button until reboot (page-cache patch). */
+    private boolean failedRun;
+    /** Raw "***FAILED***: ..." text from the exploit, used for the failure log. */
+    private String lastFailReason;
+
     @Override
     public void report(String msg) {
         Log.i(TAG, msg.trim());
@@ -74,9 +90,11 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 if (t.matches("\\d+\\s*(\\u2026|\\.{3})?")) {
                     continue;
                 }
-                // Drop internal patch/hook details and result headers.
+                // Drop internal patch/hook details and raw result markers: the
+                // app renders its own SETUP/EXPLOIT/INIT/CLEANUP headers and
+                // synthesizes a single failure line instead of the raw one.
                 if (t.contains("hook=") || t.matches("\\*+SUCCESS\\*+")
-                        || t.contains("exploit success")) {
+                        || t.startsWith("***FAILED***")) {
                     continue;
                 }
                 // Strip hex file offsets: ".../libc.so+0x6e8b0" -> ".../libc.so"
@@ -95,49 +113,90 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         saveLog();
     }
 
-    /** Translates raw native log lines into two-step progress-bar states. */
+    /** Translates raw native log lines into two-step progress-bar states.
+     *  Seg 1 tracks the file patching, seg 2 the init phase: since upstream 3.2
+     *  the LKM hands off to "bootstrap", which reports progress by touching
+     *  /dev/dfm* nodes that exp.c polls for 70 seconds and prints. */
     private void driveProgress(String t) {
         if (t.isEmpty()) return;
+        if (t.startsWith("***FAILED***")) {
+            lastFailReason = t.substring("***FAILED***:".length()).trim();
+        }
         switch (t) {
             case "=== setup ===":
                 exploitPhase = "setup";
                 setSeg1(0.05f);
                 break;
-            case "=== exploit ===":
+            case "=== exploit (patching files) ===":
                 exploitPhase = "exploit";
                 setSeg1(0.15f);
+                break;
+            case "=== init  ===":
+                exploitPhase = "init";
+                setSeg2(0.05f, "Verification", 0xFFFFFFFF);
                 break;
             case "=== cleanup ===":
                 exploitPhase = "cleanup";
                 cleanupSteps = 0;
-                setSeg1(1f);
-                setSeg2(0.05f, "Verification", 0xFFFFFFFF);
                 break;
             default:
                 break;
         }
-        if (exploitPhase.equals("setup") && t.startsWith("ksud staged")) {
+        if (exploitPhase.equals("setup") && t.startsWith("found ko_target:")) {
             setSeg1(0.10f);
         }
-        if (exploitPhase.equals("exploit") && t.startsWith("patched")) {
-            if (t.contains("crash_dump64")) {
+        if (exploitPhase.equals("exploit")) {
+            if (t.startsWith("patch: crash_dump64")) {
                 setSeg1(0.30f);
-            } else if (t.contains("libbinderdebug")) {
-                setSeg1(0.55f);
-            } else if (t.contains("libc++.so")) {
-                setSeg1(Math.min(0.80f, seg1 + 0.05f));
+            } else if (t.contains("<- dfroot.ko")) {
+                setSeg1(0.50f);
+            } else if (t.startsWith("Finding symbol offsets")) {
+                setSeg1(0.60f);
+            } else if (t.contains("<- shellcode")) {
+                setSeg1(0.75f);
+            } else if (t.contains("<- trampoline")) {
+                setSeg1(0.90f);
+            } else if (t.startsWith("Triggering hook")) {
+                setSeg1(0.95f);
             }
         }
-        if (t.startsWith("* triggering")) {
-            setSeg1(0.85f);
-        }
+        // Init phase: one step per bootstrap marker (see exp.c markers[]).
         if (t.startsWith("libc++: mutex acquired")) {
-            setSeg1(0.95f);
+            setSeg1(1f);
+            setSeg2(0.12f, "Verification", 0xFFFFFFFF);
         }
-        if (exploitPhase.equals("cleanup")
-                && (t.startsWith("* restore") || t.startsWith("* cache dropped"))) {
+        if (t.startsWith("dfroot: launching bootstrap")) {
+            setSeg2(0.24f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.startsWith("bootstrap: prefs loaded")) {
+            setSeg2(0.36f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.startsWith("bootstrap: adopting zygote env")) {
+            setSeg2(0.48f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.startsWith("bootstrap: env adopted")
+                || t.startsWith("bootstrap: WARNING: adopt zygote env failed")) {
+            setSeg2(0.56f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.startsWith("bootstrap: setting partitions ro")) {
+            setSeg2(0.64f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.startsWith("bootstrap: partitions set ro")
+                || t.startsWith("bootstrap: WARNING: set partitions ro failed")) {
+            setSeg2(0.72f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.startsWith("bootstrap: WARNING: disable modules failed")) {
+            setSeg2(0.76f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.startsWith("bootstrap: starting SU daemon")) {
+            setSeg2(0.85f, "Verification", 0xFFFFFFFF);
+        }
+        if (t.matches("\\*+SUCCESS\\*+")) {
+            setSeg1(1f);
+            setSeg2(1f, "Verified", 0xFFFFFFFF);
+        }
+        if (exploitPhase.equals("cleanup") && t.startsWith("restoring")) {
             cleanupSteps++;
-            setSeg2(Math.min(1f, cleanupSteps / 3f), "Verification", 0xFFFFFFFF);
         }
     }
 
@@ -184,7 +243,8 @@ public class MainActivity extends AppCompatActivity implements IReporter {
 
     /** Header lines render big, white and bold; the rest is dimmed. */
     private boolean isHeader(String line) {
-        return line.equals("SETUP") || line.equals("EXPLOIT") || line.equals("CLEANUP")
+        return line.equals("SETUP") || line.equals("EXPLOIT (PATCHING FILES)")
+                || line.equals("INIT") || line.equals("CLEANUP")
                 || line.startsWith("EXPLOIT FAILED")
                 || line.equals(fwToken());
     }
@@ -248,11 +308,12 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        mDeCtx = createDeviceProtectedStorageContext();
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
         // Version tag flowing right after the header title.
-        SpannableString title = new SpannableString("DirtyFrag 1.08");
+        SpannableString title = new SpannableString("DirtyFrag 1.10");
         pillSpan = new VersionPillSpan(0.45f);
         title.setSpan(pillSpan, 10, title.length(),
                 SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -269,15 +330,32 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         // D2 vault status (Samsung VaultKeeper): Odin flashing allowed or
         // locked. Read-only; non-Samsung devices show "not available".
 
-        // KSU modules toggle: marks every installed module disabled/enabled
-        // (diabl0w ksud convention: per-module `disable` flag files, honored
-        // at next boot). State is read back from the device via su.
+        // SU Manager card: upstream 3.2 deleted the bundled assets/ksud, so the
+        // exploit stages libksud.so out of the chosen manager's
+        // nativeLibraryDir and refuses to run without one. Only apps that
+        // actually ship that library are offered.
+        loadSuManagerPref();
+        binding.rowSuManager.setOnClickListener(v -> {
+            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            showSuManagerPopup();
+        });
+
+        // KSU modules toggle: since 3.2 this is a plain preference, not a root
+        // operation. bootstrap.c reads disable_modules and touches a `disable`
+        // flag file in every installed module before ksud runs, so the toggle
+        // works before the device is rooted and applies on the next root.
+        moduleRefresh = true;
+        binding.switchModules.setChecked(!mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE)
+                .getBoolean("disable_modules", false));
+        moduleRefresh = false;
+        binding.modulesSubtitle.setText(binding.switchModules.isChecked()
+                ? "Enabled - Active at next reroot"
+                : "Disabled - No Modules on reroot");
         binding.switchModules.setOnCheckedChangeListener((btn, on) -> {
             if (moduleRefresh) return;
             btn.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             applyModuleState(on);
         });
-        mExec.execute(this::refreshModuleState);
 
         // Force real bold (wght 700) One UI Sans on the toolbar title TextView.
         binding.toolbar.post(() -> {
@@ -389,7 +467,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             binding.twoStep.reset();
             setCompactButton(true, false);
             updateLogVisibility();
-            mExec.execute(() -> runExploit(false));
+            mExec.execute(this::runExploit);
         });
 
         binding.btnKsu.setOnClickListener(v -> {
@@ -477,7 +555,10 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             box.addView(exRow, new android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
 
-            // -- Remove KSU/KSUD row: 3-tap confirm, greyed without root --
+            // -- Remove KSU/KSUD row: 3-tap confirm, greyed out until a manager
+            //    is picked. Pre-3.2 this hardcoded me.weishu.kernelsu; it now
+            //    targets whichever manager is actually selected. --
+            final boolean haveManager = suManagerPkg != null;
             android.widget.LinearLayout rmCol = new android.widget.LinearLayout(this);
             rmCol.setOrientation(android.widget.LinearLayout.VERTICAL);
             rmCol.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
@@ -486,18 +567,18 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             rmCol.setBackgroundResource(R.drawable.menu_row_highlight);
             rmTitle.setText("Remove KSU/KSUD");
             rmTitle.setGravity(android.view.Gravity.START);
-            rmTitle.setTextColor(rootedMenu ? 0xFFE8E8E8 : 0xFF6E6E6E);
+            rmTitle.setTextColor(haveManager ? 0xFFE8E8E8 : 0xFF6E6E6E);
             rmTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
             rmCol.addView(rmTitle);
             TextView rmSub = new TextView(this);
-            rmSub.setText(rootedMenu ? "Click 3 times" : "Requires root");
+            rmSub.setText(haveManager ? "Click 3 times" : "No SU manager selected");
             rmSub.setGravity(android.view.Gravity.START);
-            rmSub.setTextColor(rootedMenu ? 0xFF8E8E8E : 0xFF5A5A5A);
+            rmSub.setTextColor(haveManager ? 0xFF8E8E8E : 0xFF5A5A5A);
             rmSub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11);
             rmCol.addView(rmSub);
             final int[] taps = {0};
             rmCol.setOnClickListener(v2 -> {
-                if (!rootedMenu) return;
+                if (!haveManager) return;
                 v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                 taps[0]++;
                 if (taps[0] == 1) {
@@ -511,32 +592,19 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                     return;
                 }
                 if (pwRef[0] != null) pwRef[0].dismiss();
+                // Deliberately NOT calling `ksud uninstall`: its upstream
+                // implementation force-flashes a stored boot image when a backup
+                // exists and reboots the device after 5 seconds - surprises we
+                // don't want. DirtyFrag's kernel side is a page-cache patch that
+                // a plain reboot clears, so removing the manager app is the job.
                 try {
-                    // Deliberately NOT calling `ksud uninstall`: its upstream
-                    // implementation force-flashes a stored boot image when a
-                    // backup exists and reboots the device after 5 seconds -
-                    // surprises we don't want. Explicit removals only, plus
-                    // the manager app this row promises to remove.
-                    Process p = Runtime.getRuntime().exec(new String[]{
-                            "su", "-c",
-                            "rm -rf /data/adb/ksu /data/adb/ksud"
-                                    + " /data/adb/post-fs-data.d"
-                                    + " /data/adb/modules_update"
-                                    + " /data/adb/modules /data/adb/ksu.bk"
-                                    + " /data/adb/preinit*; "
-                                    + "pm uninstall me.weishu.kernelsu; "
-                                    + "rm -f /data/user_de/0/df.root/ksud"});
-                    int rc = p.waitFor();
-                    mMain.post(() -> {
-                        Toast.makeText(MainActivity.this,
-                                rc == 0 ? "KSU/KSUD removed"
-                                        : "Removal failed (code " + rc + ")",
-                                Toast.LENGTH_SHORT).show();
-                        setRootedState(false);
-                    });
+                    Intent un = new Intent(Intent.ACTION_DELETE,
+                            Uri.fromParts("package", suManagerPkg, null));
+                    un.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(un);
                 } catch (Exception e) {
                     Toast.makeText(MainActivity.this,
-                            "su not available", Toast.LENGTH_SHORT).show();
+                            "Uninstall prompt unavailable", Toast.LENGTH_SHORT).show();
                 }
             });
             box.addView(rmCol, new android.widget.LinearLayout.LayoutParams(
@@ -627,6 +695,10 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 .getSharedPreferences("dfroot", MODE_PRIVATE)
                 .getBoolean("expert_mode", false);
         applyExpertMode();
+
+        // Run stays locked until an SU manager is selected (and, after a failed
+        // run, until the device has been rebooted).
+        updateRunButton();
     }
 
     /** Expert mode off: the autorun card is inaccessible - greyed text and
@@ -644,119 +716,235 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 && binding.switchBootStart.isChecked());
     }
 
-    /** Re-read the modules state when returning to the app: if the user just
-     *  granted root in the KSU manager, the toggle updates immediately
-     *  instead of staying stale until the next app open. */
+    /** Re-read the SU manager selection when returning to the app: the user may
+     *  have installed or uninstalled a manager while we were in the background,
+     *  and the Run button has to reflect that immediately. */
     @Override
     protected void onResume() {
         super.onResume();
-        mExec.execute(this::refreshModuleState);
+        loadSuManagerPref();
+        updateRunButton();
     }
 
     private void setRootedState() {
         setRootedState(true);
     }
 
-    /** Runs a command as root (su). Returns stdout, or null when su is
-     *  unavailable (module not loaded / not granted). Sets suState with the
-     *  failure reason for the UI. */
-    private String suState = "unknown";
-    private String runSu(String cmd) {
-        suState = "unknown";
-        try {
-            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-            java.io.BufferedReader r = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream()));
-            java.io.BufferedReader err = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getErrorStream()));
-            StringBuilder sb = new StringBuilder();
-            String ln;
-            while ((ln = r.readLine()) != null) sb.append(ln).append('\n');
-            StringBuilder eb = new StringBuilder();
-            while ((ln = err.readLine()) != null) eb.append(ln).append('\n');
-            err.close();
-            r.close();
-            int rc = p.waitFor();
-            if (rc == 0) {
-                suState = "ok";
-                return sb.toString();
-            }
-            suState = ("denied (rc " + rc + ")" + (eb.length() > 0 ? ": " + eb.toString().trim() : ""));
-            Log.i(TAG, "su probe failed: " + suState);
-            return null;
-        } catch (Exception e) {
-            suState = "not found";
-            return null;
-        }
-    }
-
-    /** Reads the modules' disable-flag state from /data/adb/modules via su and
-     *  syncs the toggle. All-disabled = switch off, otherwise on. */
-    private void refreshModuleState() {
-        String mods = runSu("ls /data/adb/modules 2>/dev/null");
-        if (mods == null) {
-            mMain.post(() -> {
-                moduleRefresh = true;
-                binding.switchModules.setChecked(false);
-                binding.switchModules.setEnabled(false);
-                moduleRefresh = false;
-                binding.modulesSubtitle.setText("not found".equals(suState)
-                        ? "Requires root (run the exploit first)"
-                        : "No Modules Installed");
-            });
-            return;
-        }
-        int total = 0;
-        for (String s : mods.split("\n")) if (!s.trim().isEmpty()) total++;
-        if (total == 0) {
-            mMain.post(() -> {
-                moduleRefresh = true;
-                binding.switchModules.setChecked(false);
-                binding.switchModules.setEnabled(false);
-                moduleRefresh = false;
-                Log.i(TAG, "modules toggle: no modules installed");
-                binding.modulesSubtitle.setText("No Modules Installed");
-            });
-            return;
-        }
-        String dis = runSu("ls /data/adb/modules/*/disable 2>/dev/null");
-        int disabled = 0;
-        if (dis != null) for (String s : dis.split("\n")) if (!s.trim().isEmpty()) disabled++;
-        boolean allDisabled = disabled >= total;
-        final int fTotal = total, fDisabled = Math.min(disabled, total);
-        String text = fDisabled == 0
-                ? "Enabled - Active at next reroot"
-                : fDisabled == fTotal
-                    ? "Disabled - No Modules on reroot"
-                    : fDisabled + " of " + fTotal + " disabled - applies at next reroot";
-        Log.i(TAG, "modules toggle: " + fDisabled + "/" + fTotal + " disabled -> " + text);
-        mMain.post(() -> {
-            moduleRefresh = true;
-            binding.switchModules.setChecked(!allDisabled);
-            binding.switchModules.setEnabled(true);
-            moduleRefresh = false;
-            binding.modulesSubtitle.setText(text);
-        });
-    }
-
-    /** Applies the toggle: disable = touch a `disable` flag in every module,
-     *  enable = remove them. Takes effect at the next reboot (modules are
-     *  mounted during boot only). */
+    /** Applies the Modules card. Since 3.2 this is a preference write, not a
+     *  root operation: bootstrap.c reads disable_modules and touches a
+     *  `disable` flag file in every installed module before it starts ksud
+     *  (a broken module otherwise bootloops the device). OFF = modules stay
+     *  disabled on the next root, ON = modules load. No su required. */
     private void applyModuleState(boolean on) {
-        String cmd = on
-                ? "rm -f /data/adb/modules/*/disable 2>/dev/null"
-                : "for d in /data/adb/modules/*/; do [ -f \"$d/module.prop\" ] && touch \"$d/disable\" 2>/dev/null; done";
-        mExec.execute(() -> {
-            String r = runSu(cmd);
-            mMain.post(() -> {
-                Toast.makeText(MainActivity.this,
-                        r == null ? "su not available"
-                                : on ? "KSU modules enabled - applies after reboot"
-                                : "KSU modules disabled - applies after reboot",
-                        Toast.LENGTH_SHORT).show();
-                refreshModuleState();
+        SharedPreferences sp = mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE);
+        SharedPreferences.Editor ed = sp.edit();
+        if (on) ed.remove("disable_modules");
+        else ed.putBoolean("disable_modules", true);
+        ed.apply();
+        binding.modulesSubtitle.setText(on
+                ? "Enabled - Active at next reroot"
+                : "Disabled - No Modules on reroot");
+        Toast.makeText(this,
+                on ? "KSU modules enabled - applies at next root"
+                        : "KSU modules disabled - applies at next root",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    // ---- SU manager picker --------------------------------------------------
+
+    /** One candidate: an app that actually ships libksud.so. */
+    private static final class SuManagerEntry {
+        final String packageName;
+        final CharSequence label;
+
+        SuManagerEntry(String pkg, CharSequence label) {
+            this.packageName = pkg;
+            this.label = label;
+        }
+    }
+
+    /** Every installed app carrying libksud.so in its native lib dir - exactly
+     *  the set ExploitRunner.stageAssets() can use, so anything listed here is
+     *  guaranteed to pass the runtime check too. */
+    private List<SuManagerEntry> scanSuManagers() {
+        List<SuManagerEntry> out = new ArrayList<>();
+        PackageManager pm = getPackageManager();
+        for (ApplicationInfo ai : pm.getInstalledApplications(0)) {
+            if (ai.packageName.equals(getPackageName())) continue;
+            if (ai.nativeLibraryDir == null) continue;
+            if (!new File(ai.nativeLibraryDir, "libksud.so").exists()) continue;
+            out.add(new SuManagerEntry(ai.packageName, pm.getApplicationLabel(ai)));
+        }
+        out.sort((a, b) -> a.label.toString().compareToIgnoreCase(b.label.toString()));
+        return out;
+    }
+
+    /** Restores the saved selection, dropping it if that app is gone or no
+     *  longer ships libksud.so. */
+    private void loadSuManagerPref() {
+        SharedPreferences sp = mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE);
+        String saved = sp.getString("su_manager", null);
+        suManagerPkg = null;
+        suManagerLabel = null;
+        if (saved != null) {
+            for (SuManagerEntry e : scanSuManagers()) {
+                if (e.packageName.equals(saved)) {
+                    suManagerPkg = e.packageName;
+                    suManagerLabel = e.label;
+                    break;
+                }
+            }
+            if (suManagerPkg == null) sp.edit().remove("su_manager").apply();
+        }
+        binding.suManagerSubtitle.setText(suManagerPkg == null
+                ? "Not selected - required"
+                : suManagerLabel + "  (" + suManagerPkg + ")");
+        binding.suManagerSubtitle.setTextColor(suManagerPkg == null
+                ? 0xFFE57373 : 0xFF9E9E9E);
+    }
+
+    /** OneUI-style rounded popup list over the dim overlay - same look and feel
+     *  as the overflow menu, so the picker does not look like a stock spinner. */
+    private void showSuManagerPopup() {
+        float md = getResources().getDisplayMetrics().density;
+        List<SuManagerEntry> apps = scanSuManagers();
+        final android.widget.PopupWindow[] pwRef = {null};
+
+        android.widget.LinearLayout box = new android.widget.LinearLayout(this);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setBackgroundResource(R.drawable.popup_bg);
+        box.setPadding(0, (int) (6 * md), 0, (int) (6 * md));
+
+        if (apps.isEmpty()) {
+            TextView none = new TextView(this);
+            none.setText("No app with libksud.so found");
+            none.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            none.setPadding((int) (20 * md), (int) (12 * md), (int) (20 * md), (int) (12 * md));
+            none.setTextColor(0xFF6E6E6E);
+            none.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            box.addView(none);
+        }
+
+        for (SuManagerEntry e : apps) {
+            android.widget.LinearLayout col = new android.widget.LinearLayout(this);
+            col.setOrientation(android.widget.LinearLayout.VERTICAL);
+            col.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            col.setBackgroundResource(R.drawable.menu_row_highlight);
+            col.setPadding((int) (20 * md), 0, (int) (20 * md), 0);
+
+            android.widget.LinearLayout line = new android.widget.LinearLayout(this);
+            line.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+            line.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            TextView t = new TextView(this);
+            t.setText(e.label);
+            t.setTextColor(0xFFE8E8E8);
+            t.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            line.addView(t, new android.widget.LinearLayout.LayoutParams(
+                    0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            if (e.packageName.equals(suManagerPkg)) {
+                android.view.View dot = new android.view.View(this);
+                dot.setBackgroundResource(R.drawable.dot_white);
+                android.widget.LinearLayout.LayoutParams dotLp =
+                        new android.widget.LinearLayout.LayoutParams(
+                                (int) (7 * md), (int) (7 * md));
+                dotLp.setMargins((int) (7 * md), 0, 0, 0);
+                line.addView(dot, dotLp);
+            }
+            col.addView(line, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (26 * md)));
+
+            TextView sub = new TextView(this);
+            sub.setText(e.packageName);
+            sub.setTextColor(0xFF8E8E8E);
+            sub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11);
+            col.addView(sub);
+
+            col.setOnClickListener(v2 -> {
+                v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                selectSuManager(e);
+                if (pwRef[0] != null) pwRef[0].dismiss();
             });
+            box.addView(col, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (56 * md)));
+        }
+
+        box.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        int cardW = binding.cardSuManager.getWidth();
+        int pw_w = cardW > 0 ? cardW : Math.max(box.getMeasuredWidth(), (int) (240 * md));
+
+        final android.widget.PopupWindow pw = new android.widget.PopupWindow(box,
+                pw_w, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        pw.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                android.graphics.Color.TRANSPARENT));
+        pw.setOutsideTouchable(true);
+        pwRef[0] = pw;
+        pw.setOnDismissListener(() ->
+                binding.dimOverlay.animate().alpha(0f).setDuration(150)
+                        .withEndAction(() -> binding.dimOverlay
+                                .setVisibility(View.GONE)).start());
+
+        box.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, android.graphics.Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), 26 * md);
+            }
         });
+        box.setClipToOutline(true);
+        box.setElevation(48 * md);
+
+        int[] loc = new int[2];
+        binding.cardSuManager.getLocationOnScreen(loc);
+        int x = loc[0] + (int) (16 * md);
+        int y = loc[1] + binding.cardSuManager.getHeight() + (int) (4 * md);
+        binding.dimOverlay.setVisibility(View.VISIBLE);
+        binding.dimOverlay.setAlpha(0f);
+        binding.dimOverlay.animate().alpha(0.5f).setDuration(150).start();
+        box.setPivotX(0f);
+        box.setPivotY(0f);
+        box.setScaleX(0.9f);
+        box.setScaleY(0.9f);
+        box.setAlpha(0f);
+        pw.showAtLocation(binding.cardSuManager,
+                android.view.Gravity.TOP | android.view.Gravity.START, x, y);
+        box.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(150)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .start();
+    }
+
+    /** Writes the DE pref that bootstrap.c reads as su_manager, then unlocks Run. */
+    private void selectSuManager(SuManagerEntry e) {
+        mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE)
+                .edit().putString("su_manager", e.packageName).apply();
+        suManagerPkg = e.packageName;
+        suManagerLabel = e.label;
+        binding.suManagerSubtitle.setText(e.label + "  (" + e.packageName + ")");
+        binding.suManagerSubtitle.setTextColor(0xFF9E9E9E);
+        updateRunButton();
+    }
+
+    /** Run needs a manager selected, no failed-run lock and no existing root. */
+    private boolean canRun() {
+        return suManagerPkg != null && !failedRun && !new File("/dev/df").exists();
+    }
+
+    /** Single place that decides the Run pill's look and enabled state. */
+    private void updateRunButton() {
+        if (running) return;
+        if (new File("/dev/df").exists()) {
+            setRootedState(true);
+            return;
+        }
+        if (failedRun) {
+            setFailedState();
+            return;
+        }
+        boolean ok = suManagerPkg != null;
+        binding.btnRun.setEnabled(ok);
+        binding.btnRun.setText("Run exploit");
+        binding.btnRun.setTextColor(ok ? 0xFFE0E0E0 : 0xFF6E6E6E);
+        binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(ok ? 0xFF7A7A7A : 0xFF1F1F1F));
+        ((com.google.android.material.button.MaterialButton) binding.btnRun)
+                .setStrokeColor(ColorStateList.valueOf(ok ? 0xFFA6A6A6 : 0xFF1F1F1F));
     }
 
     /** SamSU-style GitHub release check: the pill around the version turns
@@ -819,6 +1007,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
      *  The pill stays disabled because the vendor patch is page-cache only:
      *  retrying without rebooting would fail the same way. */
     private void setFailedState() {
+        failedRun = true;
         binding.twoStep.setFailed(true);
         binding.twoStep.setSeg1(seg1, "Failure");
         binding.twoStep.setSeg2(1f, "Reboot", 0xFFE57373);
@@ -833,15 +1022,18 @@ public class MainActivity extends AppCompatActivity implements IReporter {
 
     private void setRootedState(boolean rooted) {
         runArmed = false;
-        binding.btnRun.setEnabled(!rooted);
+        // Not rooted does not mean runnable: the manager still has to be picked
+        // and a failed run locks the pill until reboot.
+        boolean ok = !rooted && canRun();
+        int fg = (rooted || !ok) ? 0xFF6E6E6E : 0xFFE0E0E0;
+        int bg = (rooted || !ok) ? 0xFF1F1F1F : 0xFF7A7A7A;
+        int stroke = (rooted || !ok) ? 0xFF1F1F1F : 0xFFA6A6A6;
+        binding.btnRun.setEnabled(ok);
         binding.btnRun.setText(rooted ? "Rooted" : "Run exploit");
-        binding.btnRun.setTextColor(
-                rooted ? 0xFF6E6E6E : 0xFFE0E0E0);
-        binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(
-                rooted ? 0xFF1F1F1F : 0xFF7A7A7A));
+        binding.btnRun.setTextColor(fg);
+        binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(bg));
         ((com.google.android.material.button.MaterialButton) binding.btnRun)
-                .setStrokeColor(ColorStateList.valueOf(
-                        rooted ? 0xFF1F1F1F : 0xFFA6A6A6));
+                .setStrokeColor(ColorStateList.valueOf(stroke));
         // Rooted/running: shrink the pill left and pop the KSU circle next to
         // it (lit when rooted); fresh run state: full-width pill, no circle.
         setCompactButton(rooted, rooted);
@@ -914,20 +1106,21 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         g.start();
     }
 
+    /** Opens the SU manager that is actually selected - pre-3.2 this walked a
+     *  hardcoded package list that no longer matches reality. */
     private void openKsu() {
-        // Try the known manager packages: official KernelSU, KernelSU-Next, APatch.
-        String[] candidates = {
-                "me.weishu.kernelsu", "com.rifsxd.ksunext", "me.bmax.apatch"};
-        PackageManager pm = getPackageManager();
-        for (String pkg : candidates) {
-            Intent launch = pm.getLaunchIntentForPackage(pkg);
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(launch);
-                return;
-            }
+        if (suManagerPkg == null) {
+            Toast.makeText(this, "No SU manager selected", Toast.LENGTH_SHORT).show();
+            return;
         }
-        Toast.makeText(this, "KernelSU manager not found", Toast.LENGTH_SHORT).show();
+        Intent launch = getPackageManager().getLaunchIntentForPackage(suManagerPkg);
+        if (launch == null) {
+            Toast.makeText(this, suManagerPkg + " cannot be launched",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(launch);
     }
 
     private static int mixColor(int a, int b, float t) {
@@ -966,15 +1159,25 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         }
     }
 
-    private void runExploit(boolean softReboot) {
+    private void runExploit() {
+        // bootstrap.c reads soft_reboot straight out of the DE prefs, so mirror
+        // the Autorun card's choice into the key it reads right before launch.
+        SharedPreferences sp = mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE);
+        boolean autoSoftReboot = sp.getBoolean("auto_soft_reboot", false);
+        sp.edit().putBoolean("soft_reboot", autoSoftReboot).apply();
+        lastFailReason = null;
         try {
-            int rc = ExploitRunner.run(this, this, softReboot);
+            int rc = ExploitRunner.run(mDeCtx, this);
             if (rc != 0) {
-                String why = rc == 1 ? "ksud exited with error" : "check logs";
+                // 0 ok, 1 ksud/bootstrap error, 2 poll timeout or bad setup,
+                // 3 failed to patch files (see exp.c markers[]).
+                String why = lastFailReason != null ? lastFailReason
+                        : rc == 1 ? "ksud exited with error"
+                        : rc == 2 ? "check logs"
+                        : "failed to patch files";
                 report("\n=== exploit failed: " + why + " ===\n");
             }
-            createDeviceProtectedStorageContext()
-                    .getSharedPreferences("dfroot", MODE_PRIVATE)
+            mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE)
                     .edit().putBoolean("last_run_success", rc == 0).apply();
         } catch (Exception e) {
             Log.e(TAG, "exploit exception", e);
@@ -987,8 +1190,8 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                     setRootedState(true);
                     binding.twoStep.setSeg2(1f, "Verified", 0xFFFFFFFF);
                 } else {
-                    setRootedState(false);
                     setFailedState();
+                    setRootedState(false);
                 }
                 updateLogVisibility();
             });

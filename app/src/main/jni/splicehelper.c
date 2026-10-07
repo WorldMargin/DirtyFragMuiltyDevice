@@ -43,6 +43,9 @@ void start_c(void *argblock) {
     int argc = (int)*(long *)argblock;
     char **argv = (char **)argblock + 1;
 
+    if (argc < 3 || argc > 4)
+        mysyscall1(1, __NR_exit_group);
+
     off64_t off = (off64_t)parse_int(argv[1]);
     char *target = argv[2];
     char *mode = (argc >= 4) ? argv[3] : (char *)0;

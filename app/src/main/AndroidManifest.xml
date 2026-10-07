@@ -4,22 +4,21 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <!-- Package visibility (Android 11+): without these, the app cannot see
-         the KernelSU managers and getLaunchIntentForPackage() returns null. -->
-    <queries>
-        <package android:name="me.weishu.kernelsu" />
-        <package android:name="com.rifsxd.ksunext" />
-        <package android:name="me.bmax.apatch" />
-    </queries>
+    <!-- Package visibility (Android 11+): the SU-manager picker enumerates every
+         installed app and keeps only the ones that actually ship libksud.so, so a
+         fixed <queries> allow-list is no longer enough. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
         android:label="DirtyFrag"
         android:allowBackup="false"
+<<<<<<< HEAD
         android:debuggable="true"
         android:extractNativeLibs="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
+=======
+>>>>>>> origin/master
         android:theme="@style/Theme.DirtyFrag">
 
         <activity

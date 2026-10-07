@@ -12,8 +12,15 @@ import java.io.File;
 
 /**
  * Auto-root on boot. Safety rules learned in the field:
- *  - NEVER soft-reboot during a boot-time run (that was the brick vector).
  *  - A failed run disables the receiver; the user re-enables it in the app.
+ *  - Soft reboot at boot only ever happens when the user explicitly opted in
+ *    on the Autorun card (same as pre-3.2 behaviour).
+ *
+ * Since upstream 3.2 the exploit binary no longer takes a soft-reboot flag:
+ * the LKM execs "bootstrap", which reads soft_reboot / su_manager /
+ * disable_modules directly out of the device-encrypted prefs at
+ * /data/user_de/0/df.root/shared_prefs/dfroot.xml. BootReceiver therefore
+ * mirrors the user's choice into that key before starting the run.
  */
 public class BootReceiver extends BroadcastReceiver implements IReporter {
     private static final String TAG = "dfroot";
@@ -39,6 +46,13 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
         }
         boolean autoSoftReboot = deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)
                 .getBoolean("auto_soft_reboot", false);
+        // auto_soft_reboot=true: on success, ksud triggers its OWN soft reboot
+        // after late-load completes - so Zygisk/LSPosed modules (which need a
+        // fresh Zygote with the module loaded) become active in the same power
+        // session. With it off, the exploit still roots the device but nothing
+        // reboots. bootstrap reads this from the pref, not from argv.
+        deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)
+                .edit().putBoolean("soft_reboot", autoSoftReboot).apply();
 
         PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
         PowerManager.WakeLock wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dfroot:boot");
@@ -46,13 +60,7 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
         new Thread(() -> {
             boolean ok = false;
             try {
-                // auto_soft_reboot=true: on success, ksud triggers its OWN soft
-                // reboot after late-load completes - so Zygisk/LSPosed modules
-                // (which need a fresh Zygote with the module loaded) become
-                // active in the same power session. With it off, the exploit
-                // still roots the device but nothing reboots. Manual button
-                // runs are never affected by this setting.
-                int rc = ExploitRunner.run(deCtx, this, autoSoftReboot);
+                int rc = ExploitRunner.run(deCtx, this);
                 Log.i(TAG, "boot: exploit rc=" + rc);
                 ok = rc == 0;
             } catch (Exception e) {

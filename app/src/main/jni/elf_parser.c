@@ -3,35 +3,35 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <linux/elf.h>
-#include "reporter.h"
+#include <stdio.h>
 
 int find_hook_target(const char *libcxx, const char *symname,
                      uint64_t *hook_target, uint64_t *payload_target,
-                     uint32_t *first_instruction, struct Reporter *reporter) {
+                     uint32_t *first_instruction) {
     *hook_target = 0;
     *payload_target = 0;
 
     int fd = open(libcxx, O_RDONLY);
     if (fd < 0) {
-        REPORTLN("open %s failed: %s", libcxx, strerror(errno));
+        printf("open %s failed: %s\n", libcxx, strerror(errno));
         return 1;
     }
 
     Elf64_Ehdr hdr;
     if (read(fd, (char *)&hdr, sizeof(hdr)) < (ssize_t)sizeof(hdr)) {
-        REPORTLN("read ELF header from %s failed: %s", libcxx, strerror(errno));
+        printf("read ELF header from %s failed: %s\n", libcxx, strerror(errno));
         close(fd); return 1;
     }
     if (strncmp((char *)hdr.e_ident, "\x7f""ELF", 4) != 0) {
-        REPORTLN("invalid ELF: %s", libcxx);
+        printf("invalid ELF: %s\n", libcxx);
         close(fd); return 1;
     }
     if (lseek64(fd, hdr.e_phoff, SEEK_SET) < 0) {
-        REPORTLN("lseek64 e_phoff failed: %s", strerror(errno));
+        printf("lseek64 e_phoff failed: %s\n", strerror(errno));
         close(fd); return 1;
     }
     if (hdr.e_phentsize != sizeof(Elf64_Phdr)) {
-        REPORTLN("invalid phentsize: %d", hdr.e_phentsize);
+        printf("invalid phentsize: %d\n", hdr.e_phentsize);
         close(fd); return 1;
     }
 
@@ -40,7 +40,7 @@ int find_hook_target(const char *libcxx, const char *symname,
     for (int i = 0; i < hdr.e_phnum; i++) {
         Elf64_Phdr phdr;
         if (read(fd, (char *)&phdr, sizeof(phdr)) < 0) {
-            REPORTLN("read phdr[%d] failed: %s", i, strerror(errno));
+            printf("read phdr[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         if (phdr.p_type == PT_LOAD && (phdr.p_flags & PF_X)) {
@@ -51,13 +51,18 @@ int find_hook_target(const char *libcxx, const char *symname,
         }
     }
 
+    if (executable_off == 0 && executable_vaddr == 0) {
+        printf("no executable PT_LOAD segment found in %s\n", libcxx);
+        close(fd); return 1;
+    }
+
     if (lseek64(fd, hdr.e_shoff + hdr.e_shstrndx * sizeof(Elf64_Shdr), SEEK_SET) < 0) {
-        REPORTLN("lseek64 shstrndx failed: %s", strerror(errno));
+        printf("lseek64 shstrndx failed: %s\n", strerror(errno));
         close(fd); return 1;
     }
     Elf64_Shdr str_shdr;
     if (read(fd, (char *)&str_shdr, sizeof(str_shdr)) < 0) {
-        REPORTLN("read shstrndx failed: %s", strerror(errno));
+        printf("read shstrndx failed: %s\n", strerror(errno));
         close(fd); return 1;
     }
 
@@ -65,20 +70,20 @@ int find_hook_target(const char *libcxx, const char *symname,
     for (int i = 0; i < hdr.e_shnum; i++) {
         Elf64_Shdr shdr;
         if (lseek64(fd, hdr.e_shoff + i * sizeof(Elf64_Shdr), SEEK_SET) < 0) {
-            REPORTLN("lseek64 shdr[%d] failed: %s", i, strerror(errno));
+            printf("lseek64 shdr[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         if (read(fd, (char *)&shdr, sizeof(shdr)) < 0) {
-            REPORTLN("read shdr[%d] failed: %s", i, strerror(errno));
+            printf("read shdr[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         if (lseek64(fd, shdr.sh_name + str_shdr.sh_offset, SEEK_SET) < 0) {
-            REPORTLN("lseek64 sh_name[%d] failed: %s", i, strerror(errno));
+            printf("lseek64 sh_name[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         char name[100];
         if (read(fd, name, sizeof(name) - 1) < 0) {
-            REPORTLN("read sh_name[%d] failed: %s", i, strerror(errno));
+            printf("read sh_name[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         name[sizeof(name) - 1] = 0;
@@ -87,27 +92,27 @@ int find_hook_target(const char *libcxx, const char *symname,
     }
 
     if (dynstr == 0 || dynsym_offset == 0) {
-        REPORTLN(".dynstr or .dynsym not found in %s", libcxx);
+        printf(".dynstr or .dynsym not found in %s\n", libcxx);
         close(fd); return 1;
     }
 
     for (int i = 0; i < (int)(dynsym_size / sizeof(Elf64_Sym)); i++) {
         Elf64_Sym sym;
         if (lseek64(fd, dynsym_offset + i * sizeof(Elf64_Sym), SEEK_SET) < 0) {
-            REPORTLN("lseek64 dynsym[%d] failed: %s", i, strerror(errno));
+            printf("lseek64 dynsym[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         if (read(fd, (char *)&sym, sizeof(sym)) < 0) {
-            REPORTLN("read dynsym[%d] failed: %s", i, strerror(errno));
+            printf("read dynsym[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         if (lseek64(fd, dynstr + sym.st_name, SEEK_SET) < 0) {
-            REPORTLN("lseek64 st_name[%d] failed: %s", i, strerror(errno));
+            printf("lseek64 st_name[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         char name[200];
         if (read(fd, name, sizeof(name) - 1) < 0) {
-            REPORTLN("read st_name[%d] failed: %s", i, strerror(errno));
+            printf("read st_name[%d] failed: %s\n", i, strerror(errno));
             close(fd); return 1;
         }
         name[sizeof(name) - 1] = 0;
@@ -116,24 +121,24 @@ int find_hook_target(const char *libcxx, const char *symname,
     }
 
     if (*hook_target == 0) {
-        REPORTLN("symbol %s not found in %s", symname, libcxx);
+        printf("symbol %s not found in %s\n", symname, libcxx);
         close(fd); return 1;
     }
 
     if (lseek64(fd, *hook_target, SEEK_SET) < 0) {
-        REPORTLN("lseek64 hook_target failed: %s", strerror(errno));
+        printf("lseek64 hook_target failed: %s\n", strerror(errno));
         close(fd); return 1;
     }
     if (read(fd, first_instruction, sizeof(*first_instruction)) < 0) {
-        REPORTLN("read first instruction failed: %s", strerror(errno));
+        printf("read first instruction failed: %s\n", strerror(errno));
         close(fd); return 1;
     }
 
     if (*first_instruction == 0xd503233fU || *first_instruction == 0xd503245f) {
-        REPORTLN("PACIASP/BTI at hook site, advancing +4");
+        printf("PACIASP/BTI found at hook site, advancing +4\n");
         *hook_target += 4UL;
         if (read(fd, first_instruction, sizeof(*first_instruction)) < 0) {
-            REPORTLN("read first instruction +4 failed: %s", strerror(errno));
+            printf("read first instruction +4 failed: %s\n", strerror(errno));
             close(fd); return 1;
         }
     }
