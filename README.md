@@ -90,6 +90,15 @@ JAVA_HOME="<Android Studio jbr>" ./gradlew assembleRelease
 
 The APK is written to `app/build/outputs/apk/release/dirtyfrag.apk`.
 
+Release builds are signed with `app/keystore.jks`, which is gitignored (the signing config expects
+alias `dirtyfrag` and `dirtyfrag` for both passwords). Generate your own before building:
+
+```sh
+keytool -genkeypair -v -keystore app/keystore.jks -alias dirtyfrag \
+  -keyalg RSA -keysize 2048 -validity 10000 \
+  -storepass dirtyfrag -keypass dirtyfrag
+```
+
 The eight prebuilt kernel modules are committed under `app/src/main/jni/ko/`. Upstream gitignores
 them and builds them per-KMI in CI; this fork has no CI, so they are committed to keep a clone
 buildable. They are the upstream v3.3 blobs. To build your own, use upstream's `make` / podman DDK
