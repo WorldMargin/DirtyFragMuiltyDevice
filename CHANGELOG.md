@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.11
+
+### Device support
+- Launch-time support banner now folds in a kernel-module (KMI) check: it probes the page-cache
+  primitive, and on a vulnerable device verifies that a bundled dfroot.ko matches the kernel KMI
+  (parsed from `/proc/version`). The banner reports supported / missing KMI / unsupported
+- `exp.c` picks the KO staging file dynamically: the known paths are tried first, then a scan of the
+  vendor library directories
+
+### Localisation
+- English and Simplified Chinese, with an in-app language switcher (System default / English / 简体中文)
+
+### Misc
+- In-app links point at the WorldMargin/DirtyFragMuiltyDevice fork
+- Root debug console
+- GPL-3.0 LICENSE and a NOTICE crediting the upstream forks
+
 ## 1.10
 
 Based on upstream DFRoot 3.3 (upstream 3.0 - 3.3 merged into this fork).
