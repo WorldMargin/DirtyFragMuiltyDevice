@@ -12,7 +12,9 @@ hardening) and keeps upstream's SU-manager agnostic design.
 
 ## Install
 
-1. Install the DirtyFrag APK from [Releases](https://github.com/mitschud/DirtyFrag/releases/latest).
+1. Install the DirtyFrag APK from
+   [Releases](https://github.com/WorldMargin/DirtyFragMuiltyDevice/releases/latest)
+   (original project: [mitschud/DirtyFrag](https://github.com/mitschud/DirtyFrag/releases/latest)).
 2. Install an SU manager that **ships `libksud.so`**:
    - Samsung:
      - [diabl0w's KernelSU](https://github.com/diabl0w/KernelSU/releases/latest) - bundles ksud,
@@ -141,3 +143,13 @@ next privileged call to the hooked function runs the shellcode, which loads the 
 - Original PoC and various code: https://github.com/lsposed/lspromise
 - SELinux permissive kernel modules and various code: https://github.com/polygraphene/DFReroot
 - Unprivileged XFRM socket method: https://github.com/combeng6th/DirtyInit
+
+## License
+
+GPL-3.0 - see [LICENSE](LICENSE).
+
+This fork's code is derived from `diabl0w/DFRoot` and the original
+[`mitschud/DirtyFrag`](https://github.com/mitschud/DirtyFrag), neither of which ships a license.
+The GPL-3.0 grant therefore covers only the maintainers' own contributions here; upstream portions
+remain under their authors' copyright. See [NOTICE](NOTICE) for the full attribution, including the
+third-party components (Odzhan's AES code, KernelSU/ksud). This is not legal advice.

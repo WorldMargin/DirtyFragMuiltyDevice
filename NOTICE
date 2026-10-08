@@ -1,0 +1,51 @@
+DirtyFrag
+=========
+
+This build is maintained at:
+    https://github.com/WorldMargin/DirtyFragMuiltyDevice
+
+Licensed under the GNU General Public License, version 3 (see LICENSE).
+
+
+Upstream / origins
+------------------
+
+DirtyFrag is a fork. The code in this repository is derived from, and must be
+read together with, the following projects:
+
+  * mitschud/DirtyFrag      - the original DirtyFrag project
+                              https://github.com/mitschud/DirtyFrag
+  * diabl0w/DFRoot          - the hardened fork this build is based on
+                              https://github.com/diabl0w/DFRoot
+
+These upstream projects do not ship a license file. The GPL-3.0 license
+included here is granted by the maintainers of this fork only to the extent
+they hold copyright in their own contributions, and does not, and cannot,
+grant rights to upstream code that its authors have not licensed. If you need
+to redistribute or reuse upstream portions, obtain permission from their
+respective authors.
+
+This is not legal advice.
+
+
+Third-party components
+----------------------
+
+  * AES-256-CBC implementation
+      Copyright (c) 2018 Odzhan. All Rights Reserved.
+      BSD-style license; the full text is kept in
+      app/src/main/jni/include.inc.
+
+  * KernelSU and ksud integration (GPL-3.0)
+      https://github.com/tiann/KernelSU
+
+  * Android NDK / AOSP headers and runtime pieces, under their respective
+    licenses.
+
+
+Trademarks
+----------
+
+KernelSU, KernelSU-Next, KowSU and all other product names are trademarks or
+registered trademarks of their respective owners. Use of these names is for
+identification only and does not imply endorsement.

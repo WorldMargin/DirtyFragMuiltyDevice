@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DirtyFrag</string>
+
+    <!-- Top bar -->
+    <string name="cd_menu">Menu</string>
+
+    <!-- Support banner -->
+    <string name="support_checking">Checking device support…</string>
+    <string name="support_supported">Device supported — exploit can run here</string>
+    <string name="support_unsupported">Device not supported — exploit cannot work here</string>
+    <string name="support_no_ko">Vulnerable, but no bundled kernel module for %1$s</string>
+    <string name="support_unknown">Support check could not run</string>
+
+    <!-- SU Manager card -->
+    <string name="su_manager_title">SU Manager</string>
+    <string name="su_not_selected">Not selected - required</string>
+    <string name="cd_select">Select</string>
+    <string name="no_libksud_app">No app with libksud.so found</string>
+
+    <!-- Autorun / reboot card -->
+    <string name="autorun_title">Autorun</string>
+    <string name="autorun_desc">Runs the exploit after boot</string>
+    <string name="autorun_title_expert">Autorun (Expert)</string>
+    <string name="auto_reboot_title">Auto reboot</string>
+    <string name="auto_reboot_desc">Soft reboots after root</string>
+    <string name="auto_reboot_title_expert">Auto reboot (Expert)</string>
+
+    <!-- Modules card -->
+    <string name="modules_title">KernelSU Modules</string>
+    <string name="modules_default_desc">Enabled - active at next reboot</string>
+    <string name="modules_enabled">Enabled - Active at next reroot</string>
+    <string name="modules_disabled">Disabled - No Modules on reroot</string>
+    <string name="modules_enabled_toast">KSU modules enabled - applies at next root</string>
+    <string name="modules_disabled_toast">KSU modules disabled - applies at next root</string>
+
+    <!-- Log card -->
+    <string name="advanced_log_title">Show advanced log</string>
+    <string name="advanced_log_desc">Shows full scrollable log</string>
+    <string name="cd_save_log">Save log to Downloads</string>
+
+    <!-- Run / status -->
+    <string name="run_exploit">Run exploit</string>
+    <string name="running">Running</string>
+    <string name="are_you_sure">Are you sure</string>
+    <string name="rooted">Rooted</string>
+    <string name="verified">Verified</string>
+    <string name="verification">Verification</string>
+    <string name="failure">Failure</string>
+    <string name="reboot">Reboot</string>
+
+    <!-- Overflow menu -->
+    <string name="menu_github">Github Page</string>
+    <string name="menu_expert_mode">Expert Mode</string>
+    <string name="menu_debug_console">Debug console</string>
+    <string name="menu_test_primitive">Test primitive</string>
+    <string name="menu_language">Language</string>
+    <string name="menu_remove_ksu">Remove KSU/KSUD</string>
+    <string name="menu_click_3">Click 3 times</string>
+    <string name="menu_click_2">Click 2 times</string>
+    <string name="menu_click_1">Click 1 time</string>
+    <string name="menu_one_more">One more click</string>
+    <string name="uninstall_unavailable">Uninstall prompt unavailable</string>
+
+    <!-- Language picker -->
+    <string name="language_system">System default</string>
+    <string name="language_en">English</string>
+    <string name="language_zh">简体中文</string>
+
+    <!-- Primitive probe dialog -->
+    <string name="probe_title">Primitive probe</string>
+    <string name="probe_ok">Primitive OK - device looks usable</string>
+    <string name="probe_failed">Primitive FAILED - not vulnerable</string>
+    <string name="probe_error">Error: %1$s</string>
+    <string name="ok">OK</string>
+
+    <!-- Toasts -->
+    <string name="no_su_selected">No SU manager selected</string>
+    <string name="cannot_launch">%1$s cannot be launched</string>
+    <string name="root_required">Root required - run the exploit first</string>
+    <string name="no_browser">No browser found</string>
+
+    <!-- Exploit failure reasons -->
+    <string name="fail_ksud">ksud exited with error</string>
+    <string name="fail_check_logs">check logs</string>
+    <string name="fail_patch">failed to patch files</string>
+
+    <!-- Debug console -->
+    <string name="console_title">ROOT CONSOLE</string>
+    <string name="console_subtitle_default">uid 0 · /system/bin/sh</string>
+    <string name="console_subtitle_manager">uid 0 · %1$s</string>
+    <string name="console_subtitle_none">uid 0 · no manager</string>
+    <string name="console_clear">Clear</string>
+    <string name="console_hint">shell command</string>
+    <string name="cd_run">Run</string>
+    <string name="cd_open_su">Open SU manager</string>
+    <string name="cd_open">Open</string>
+    <string name="manager_label">Manager</string>
+</resources>

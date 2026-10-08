@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DirtyFrag</string>
+
+    <!-- Top bar -->
+    <string name="cd_menu">菜单</string>
+
+    <!-- Support banner -->
+    <string name="support_checking">正在检测设备支持…</string>
+    <string name="support_supported">设备受支持 — 可在此运行 exploit</string>
+    <string name="support_unsupported">设备不受支持 — 无法在此运行 exploit</string>
+    <string name="support_no_ko">设备可利用，但缺少 %1$s 的内核模块</string>
+    <string name="support_unknown">支持检测未能运行</string>
+
+    <!-- SU Manager card -->
+    <string name="su_manager_title">SU 管理器</string>
+    <string name="su_not_selected">未选择 - 必需</string>
+    <string name="cd_select">选择</string>
+    <string name="no_libksud_app">未找到携带 libksud.so 的应用</string>
+
+    <!-- Autorun / reboot card -->
+    <string name="autorun_title">开机自启</string>
+    <string name="autorun_desc">开机后自动运行 exploit</string>
+    <string name="autorun_title_expert">开机自启（专家）</string>
+    <string name="auto_reboot_title">自动重启</string>
+    <string name="auto_reboot_desc">获取 root 后软重启</string>
+    <string name="auto_reboot_title_expert">自动重启（专家）</string>
+
+    <!-- Modules card -->
+    <string name="modules_title">KernelSU 模块</string>
+    <string name="modules_default_desc">已启用 - 下次重启生效</string>
+    <string name="modules_enabled">已启用 - 下次重新 root 后生效</string>
+    <string name="modules_disabled">已禁用 - 重新 root 时不加载模块</string>
+    <string name="modules_enabled_toast">KSU 模块已启用 - 下次 root 生效</string>
+    <string name="modules_disabled_toast">KSU 模块已禁用 - 下次 root 生效</string>
+
+    <!-- Log card -->
+    <string name="advanced_log_title">显示详细日志</string>
+    <string name="advanced_log_desc">显示完整可滚动日志</string>
+    <string name="cd_save_log">保存日志到下载目录</string>
+
+    <!-- Run / status -->
+    <string name="run_exploit">运行 exploit</string>
+    <string name="running">运行中</string>
+    <string name="are_you_sure">确定要运行？</string>
+    <string name="rooted">已 root</string>
+    <string name="verified">已验证</string>
+    <string name="verification">校验中</string>
+    <string name="failure">失败</string>
+    <string name="reboot">请重启</string>
+
+    <!-- Overflow menu -->
+    <string name="menu_github">Github 主页</string>
+    <string name="menu_expert_mode">专家模式</string>
+    <string name="menu_debug_console">调试控制台</string>
+    <string name="menu_test_primitive">测试底层原语</string>
+    <string name="menu_language">语言</string>
+    <string name="menu_remove_ksu">移除 KSU/KSUD</string>
+    <string name="menu_click_3">点击 3 次</string>
+    <string name="menu_click_2">点击 2 次</string>
+    <string name="menu_click_1">点击 1 次</string>
+    <string name="menu_one_more">再点击一次</string>
+    <string name="uninstall_unavailable">无法调起卸载界面</string>
+
+    <!-- Language picker -->
+    <string name="language_system">跟随系统</string>
+    <string name="language_en">English</string>
+    <string name="language_zh">简体中文</string>
+
+    <!-- Primitive probe dialog -->
+    <string name="probe_title">底层原语检测</string>
+    <string name="probe_ok">原语正常 - 设备可用</string>
+    <string name="probe_failed">原语失败 - 设备不受支持</string>
+    <string name="probe_error">错误：%1$s</string>
+    <string name="ok">确定</string>
+
+    <!-- Toasts -->
+    <string name="no_su_selected">未选择 SU 管理器</string>
+    <string name="cannot_launch">无法启动 %1$s</string>
+    <string name="root_required">需要 root - 请先运行 exploit</string>
+    <string name="no_browser">未找到浏览器</string>
+
+    <!-- Exploit failure reasons -->
+    <string name="fail_ksud">ksud 异常退出</string>
+    <string name="fail_check_logs">请查看日志</string>
+    <string name="fail_patch">修改文件失败</string>
+
+    <!-- Debug console -->
+    <string name="console_title">ROOT 控制台</string>
+    <string name="console_subtitle_default">uid 0 · /system/bin/sh</string>
+    <string name="console_subtitle_manager">uid 0 · %1$s</string>
+    <string name="console_subtitle_none">uid 0 · 未选择管理器</string>
+    <string name="console_clear">清空</string>
+    <string name="console_hint">shell 命令</string>
+    <string name="cd_run">运行</string>
+    <string name="cd_open_su">打开 SU 管理器</string>
+    <string name="cd_open">打开</string>
+    <string name="manager_label">管理器</string>
+</resources>

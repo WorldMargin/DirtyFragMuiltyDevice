@@ -27,20 +27,42 @@ import android.widget.Toast;
 import androidx.core.content.res.ResourcesCompat;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
+import androidx.core.os.LocaleListCompat;
 
 import df.root.databinding.ActivityMainBinding;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MainActivity extends AppCompatActivity implements IReporter {
 
     private static final String TAG = "dfroot";
+
+    /** Home of this project (the WorldMargin fork). The original upstream fork,
+     *  mitschud/DirtyFrag, is credited in the README. */
+    private static final String REPO_NEW =
+            "https://github.com/WorldMargin/DirtyFragMuiltyDevice";
+    /** GitHub API slug used for the release check. */
+    private static final String API_REPO = "WorldMargin/DirtyFragMuiltyDevice";
+
+    /** Kernel-module matrix bundled in the APK, one row per dfroot-<kmi>.ko:
+     *  {androidRelease, kverMajor, kverMinor}. Mirrors exp.c select_ko_image()
+     *  and jni/ko/*.ko; P3.1 will data-ise this into a build-time manifest, so
+     *  keep both in sync until then. */
+    private static final int[][] BUNDLED_KO_KMIS = {
+            {12, 5, 10}, {13, 5, 10}, {13, 5, 15}, {14, 5, 15},
+            {14, 6, 1},  {15, 6, 6},  {16, 6, 12}, {17, 6, 18},
+    };
 
     private ActivityMainBinding binding;
     private final Handler mMain = new Handler(Looper.getMainLooper());
@@ -140,7 +162,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 break;
             case "=== init  ===":
                 exploitPhase = "init";
-                setSeg2(0.05f, "Verification", 0xFFFFFFFF);
+                setSeg2(0.05f, getString(R.string.verification), 0xFFFFFFFF);
                 break;
             case "=== cleanup ===":
                 exploitPhase = "cleanup";
@@ -170,37 +192,37 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         // Init phase: one step per bootstrap marker (see exp.c markers[]).
         if (t.startsWith("libc++: mutex acquired")) {
             setSeg1(1f);
-            setSeg2(0.12f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.12f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("dfroot: launching bootstrap")) {
-            setSeg2(0.24f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.24f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("bootstrap: prefs loaded")) {
-            setSeg2(0.36f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.36f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("bootstrap: adopting zygote env")) {
-            setSeg2(0.48f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.48f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("bootstrap: env adopted")
                 || t.startsWith("bootstrap: WARNING: adopt zygote env failed")) {
-            setSeg2(0.56f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.56f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("bootstrap: setting partitions ro")) {
-            setSeg2(0.64f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.64f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("bootstrap: partitions set ro")
                 || t.startsWith("bootstrap: WARNING: set partitions ro failed")) {
-            setSeg2(0.72f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.72f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("bootstrap: WARNING: disable modules failed")) {
-            setSeg2(0.76f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.76f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.startsWith("bootstrap: starting SU daemon")) {
-            setSeg2(0.85f, "Verification", 0xFFFFFFFF);
+            setSeg2(0.85f, getString(R.string.verification), 0xFFFFFFFF);
         }
         if (t.matches("\\*+SUCCESS\\*+")) {
             setSeg1(1f);
-            setSeg2(1f, "Verified", 0xFFFFFFFF);
+            setSeg2(1f, getString(R.string.verified), 0xFFFFFFFF);
         }
         if (exploitPhase.equals("cleanup") && t.startsWith("restoring")) {
             cleanupSteps++;
@@ -389,8 +411,8 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 .getBoolean("disable_modules", false));
         moduleRefresh = false;
         binding.modulesSubtitle.setText(binding.switchModules.isChecked()
-                ? "Enabled - Active at next reroot"
-                : "Disabled - No Modules on reroot");
+                ? getString(R.string.modules_enabled)
+                : getString(R.string.modules_disabled));
         binding.switchModules.setOnCheckedChangeListener((btn, on) -> {
             if (moduleRefresh) return;
             btn.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
@@ -408,16 +430,11 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                     titleView = (TextView) child;
                     titleView.setTypeface(bold);
                     titleView.setOnClickListener(v -> {
-                        if (updateAvailable) openUrl(
-                                "https://github.com/mitschud/DirtyFrag/releases");
+                        if (updateAvailable) openUrl(REPO_NEW + "/releases");
                     });
                 }
             }
         });
-
-        if (new File("/dev/df").exists()) {
-            setRootedState();
-        }
 
         // Show the log from the last run, if any. No run yet -> log hidden.
         // A log saved before the current boot is stale: delete it so a reboot
@@ -462,9 +479,9 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         });
         updateLogVisibility();
 
-        // Restore the simple status for the current state: rooted device or a
-        // successful last run -> 100% + Verified; failed run -> Failed.
-        boolean rootedNow = new File("/dev/df").exists();
+        // Restore the simple status for the current state: a successful last
+        // run -> 100% + Verified; failed run -> Failed.
+        boolean rootedNow = false;
         boolean lastSuccess = hasLastLog
                 && createDeviceProtectedStorageContext()
                         .getSharedPreferences("dfroot", MODE_PRIVATE)
@@ -473,7 +490,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 && last.toLowerCase().contains("=== exploit failed");
         if (rootedNow || lastSuccess) {
             binding.twoStep.setSeg1(1f, "100%");
-            binding.twoStep.setSeg2(1f, "Verified", 0xFFFFFFFF);
+            binding.twoStep.setSeg2(1f, getString(R.string.verified), 0xFFFFFFFF);
         } else if (lastFailed) {
             setFailedState();
         }
@@ -484,14 +501,14 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             if (!runArmed) {
                 runArmed = true;
                 v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                binding.btnRun.setText("Are you sure");
+                binding.btnRun.setText(getString(R.string.are_you_sure));
                 return;
             }
             runArmed = false;
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             running = true;
             binding.btnRun.setEnabled(false);
-            binding.btnRun.setText("Running");
+            binding.btnRun.setText(getString(R.string.running));
             // Same dark greyed-out styling as the Rooted state.
             binding.btnRun.setTextColor(0xFF6E6E6E);
             binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(0xFF1F1F1F));
@@ -539,7 +556,6 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         binding.btnMenu.setOnClickListener(v -> {
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             float md = getResources().getDisplayMetrics().density;
-            boolean rootedMenu = new File("/dev/df").exists();
             final android.widget.PopupWindow[] pwRef = {null};
 
             android.widget.LinearLayout box = new android.widget.LinearLayout(this);
@@ -547,17 +563,17 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             box.setBackgroundResource(R.drawable.popup_bg);
             box.setPadding(0, (int) (6 * md), 0, (int) (6 * md));
 
-            // -- Github Page row --
+            // -- Github Page row: opens this build's home (the WorldMargin fork). --
             TextView ghRow = new TextView(this);
             ghRow.setBackgroundResource(R.drawable.menu_row_highlight);
-            ghRow.setText("Github Page");
+            ghRow.setText(R.string.menu_github);
             ghRow.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
             ghRow.setPadding((int) (20 * md), 0, 0, 0);
             ghRow.setTextColor(0xFFE8E8E8);
             ghRow.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
             ghRow.setOnClickListener(v2 -> {
                 v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                openUrl("https://github.com/mitschud/DirtyFrag");
+                openUrl(REPO_NEW);
             });
             box.addView(ghRow, new android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
@@ -568,7 +584,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             exRow.setPadding((int) (20 * md), 0, 0, 0);
             TextView exText = new TextView(this);
             exRow.setBackgroundResource(R.drawable.menu_row_highlight);
-            exText.setText("Expert Mode");
+            exText.setText(R.string.menu_expert_mode);
             exText.setTextColor(0xFFE8E8E8);
             exText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
             exRow.addView(exText);
@@ -595,6 +611,59 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             box.addView(exRow, new android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
 
+            // -- Debug console row: opens a root shell served by the daemon
+            //    bootstrap forks. The root context only exists inside bootstrap,
+            //    so this is the only way to manually retry a failed ksud
+            //    late-load without a full reroot. --
+            TextView dbgRow = new TextView(this);
+            dbgRow.setBackgroundResource(R.drawable.menu_row_highlight);
+            dbgRow.setText(R.string.menu_debug_console);
+            dbgRow.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            dbgRow.setPadding((int) (20 * md), 0, 0, 0);
+            dbgRow.setTextColor(0xFFE8E8E8);
+            dbgRow.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            dbgRow.setOnClickListener(v2 -> {
+                v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                if (pwRef[0] != null) pwRef[0].dismiss();
+                showDebugConsole();
+            });
+            box.addView(dbgRow, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
+
+            // -- Test primitive row: minimal runtime probe of the page-cache
+            //    write primitive. Needs no SU manager and doesn't run the full
+            //    exploit; tells you whether this device is usable at all. --
+            TextView probeRow = new TextView(this);
+            probeRow.setBackgroundResource(R.drawable.menu_row_highlight);
+            probeRow.setText(R.string.menu_test_primitive);
+            probeRow.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            probeRow.setPadding((int) (20 * md), 0, 0, 0);
+            probeRow.setTextColor(0xFFE8E8E8);
+            probeRow.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            probeRow.setOnClickListener(v2 -> {
+                v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                if (pwRef[0] != null) pwRef[0].dismiss();
+                runProbe();
+            });
+            box.addView(probeRow, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
+
+            // -- Language row: in-app locale switch (AppCompat persists it). --
+            TextView langRow = new TextView(this);
+            langRow.setBackgroundResource(R.drawable.menu_row_highlight);
+            langRow.setText(R.string.menu_language);
+            langRow.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            langRow.setPadding((int) (20 * md), 0, 0, 0);
+            langRow.setTextColor(0xFFE8E8E8);
+            langRow.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            langRow.setOnClickListener(v2 -> {
+                v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                if (pwRef[0] != null) pwRef[0].dismiss();
+                showLanguageDialog();
+            });
+            box.addView(langRow, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
+
             // -- Remove KSU/KSUD row: 3-tap confirm, greyed out until a manager
             //    is picked. Pre-3.2 this hardcoded me.weishu.kernelsu; it now
             //    targets whichever manager is actually selected. --
@@ -605,13 +674,14 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             rmCol.setPadding((int) (20 * md), 0, (int) (20 * md), 0);
             TextView rmTitle = new TextView(this);
             rmCol.setBackgroundResource(R.drawable.menu_row_highlight);
-            rmTitle.setText("Remove KSU/KSUD");
+            rmTitle.setText(R.string.menu_remove_ksu);
             rmTitle.setGravity(android.view.Gravity.START);
             rmTitle.setTextColor(haveManager ? 0xFFE8E8E8 : 0xFF6E6E6E);
             rmTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
             rmCol.addView(rmTitle);
             TextView rmSub = new TextView(this);
-            rmSub.setText(haveManager ? "Click 3 times" : "No SU manager selected");
+            rmSub.setText(haveManager ? getString(R.string.menu_click_3)
+                    : getString(R.string.no_su_selected));
             rmSub.setGravity(android.view.Gravity.START);
             rmSub.setTextColor(haveManager ? 0xFF8E8E8E : 0xFF5A5A5A);
             rmSub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11);
@@ -622,13 +692,13 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                 taps[0]++;
                 if (taps[0] == 1) {
-                    rmTitle.setText("Are you sure");
-                    rmSub.setText("Click 2 times");
+                    rmTitle.setText(R.string.are_you_sure);
+                    rmSub.setText(R.string.menu_click_2);
                     return;
                 }
                 if (taps[0] == 2) {
-                    rmTitle.setText("One more click");
-                    rmSub.setText("Click 1 time");
+                    rmTitle.setText(R.string.menu_one_more);
+                    rmSub.setText(R.string.menu_click_1);
                     return;
                 }
                 if (pwRef[0] != null) pwRef[0].dismiss();
@@ -680,6 +750,27 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, (int) md));
             sep2Lp.setMargins((int) (20 * md), 0, (int) (20 * md), 0);
             box.addView(sep2, 3, sep2Lp);
+            android.view.View sep3 = new android.view.View(this);
+            sep3.setBackgroundColor(0xFF3F3F3F);
+            android.widget.LinearLayout.LayoutParams sep3Lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, (int) md));
+            sep3Lp.setMargins((int) (20 * md), 0, (int) (20 * md), 0);
+            box.addView(sep3, 5, sep3Lp);
+            android.view.View sep4 = new android.view.View(this);
+            sep4.setBackgroundColor(0xFF3F3F3F);
+            android.widget.LinearLayout.LayoutParams sep4Lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, (int) md));
+            sep4Lp.setMargins((int) (20 * md), 0, (int) (20 * md), 0);
+            box.addView(sep4, 7, sep4Lp);
+            android.view.View sep5 = new android.view.View(this);
+            sep5.setBackgroundColor(0xFF3F3F3F);
+            android.widget.LinearLayout.LayoutParams sep5Lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, (int) md));
+            sep5Lp.setMargins((int) (20 * md), 0, (int) (20 * md), 0);
+            box.addView(sep5, 9, sep5Lp);
 
             box.setOutlineProvider(new android.view.ViewOutlineProvider() {
                 @Override
@@ -739,14 +830,136 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         // Run stays locked until an SU manager is selected (and, after a failed
         // run, until the device has been rebooted).
         updateRunButton();
+
+        // Launch-time device support check: run the primitive probe once and
+        // report the verdict in the inline status banner (no dialog).
+        runSupportCheck();
+    }
+
+    /** Automatically probes the page-cache primitive on launch and writes the
+     *  verdict into the inline support banner. Independent of the SU manager,
+     *  so it works before the user has picked one. The verdict also folds in
+     *  the kernel-module (KMI) check: a vulnerable device still can't be rooted
+     *  if no bundled dfroot.ko matches its kernel. */
+    private void runSupportCheck() {
+        if (running) return;
+        setSupportBanner(R.string.support_checking, 0xFFB0B0B0);
+        final int[] kmi = parseKmi(kernelRelease());
+        mExec.execute(() -> {
+            int rc;
+            try {
+                rc = ExploitRunner.probe(mDeCtx, s -> { });
+            } catch (Exception e) {
+                Log.e(TAG, "support check failed", e);
+                mMain.post(() -> setSupportBanner(R.string.support_unknown, 0xFFE5A663));
+                return;
+            }
+            final int r = rc;
+            mMain.post(() -> {
+                if (r != 0) {
+                    setSupportBanner(R.string.support_unsupported, 0xFFE57373);
+                } else if (kmi != null && !kmiCovered(kmi)) {
+                    setSupportBanner(getString(R.string.support_no_ko, kmiLabel(kmi)), 0xFFE5A663);
+                } else {
+                    setSupportBanner(R.string.support_supported, 0xFF7BD88F);
+                }
+            });
+        });
+    }
+
+    /** Kernel release string, e.g. "6.1.145-android14-11-maybe-dirty". Reads
+     *  /proc/version as the native side does; falls back to os.version. */
+    private static String kernelRelease() {
+        try (BufferedReader r = new BufferedReader(new FileReader("/proc/version"))) {
+            String line = r.readLine();
+            if (line != null) {
+                String marker = "Linux version ";
+                int i = line.indexOf(marker);
+                if (i >= 0) {
+                    String rest = line.substring(i + marker.length()).trim();
+                    int sp = rest.indexOf(' ');
+                    if (sp > 0) rest = rest.substring(0, sp);
+                    if (!rest.isEmpty()) return rest;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return System.getProperty("os.version");
+    }
+
+    /** Parses a kernel release into {androidRelease, major, minor}, or null when
+     *  it is not a GKI-style "<w>.<x>.<y>-android<rel>-..." release. */
+    private static int[] parseKmi(String release) {
+        if (release == null) return null;
+        Matcher rel = Pattern.compile("^(\\d+)\\.(\\d+)").matcher(release);
+        Matcher and = Pattern.compile("android(\\d+)").matcher(release);
+        if (!rel.find() || !and.find()) return null;
+        return new int[]{ Integer.parseInt(and.group(1)),
+                          Integer.parseInt(rel.group(1)),
+                          Integer.parseInt(rel.group(2)) };
+    }
+
+    private static String kmiLabel(int[] kmi) {
+        return "android" + kmi[0] + "-" + kmi[1] + "." + kmi[2];
+    }
+
+    /** Mirrors exp.c select_ko_image(): covered when a bundled module matches
+     *  the device's major.minor (android release preferred); any module with
+     *  the same major.minor is accepted as the fallback the exploit would use. */
+    private static boolean kmiCovered(int[] kmi) {
+        boolean sameMajorMinor = false;
+        for (int[] ko : BUNDLED_KO_KMIS) {
+            if (ko[1] != kmi[1] || ko[2] != kmi[2]) continue;
+            if (ko[0] == kmi[0]) return true;
+            sameMajorMinor = true;
+        }
+        return sameMajorMinor;
+    }
+
+    private void setSupportBanner(int textRes, int color) {
+        setSupportBanner(getString(textRes), color);
+    }
+
+    private void setSupportBanner(CharSequence text, int color) {
+        binding.supportBanner.setText(text);
+        binding.supportBanner.setTextColor(color);
+    }
+
+    /** In-app language picker: System default / English / 简体中文. AppCompat
+     *  persists the choice and recreates the activity on change. */
+    private void showLanguageDialog() {
+        final String[] tags = { "", "en", "zh-CN" };
+        final String[] labels = {
+                getString(R.string.language_system),
+                getString(R.string.language_en),
+                getString(R.string.language_zh)
+        };
+        LocaleListCompat current = AppCompatDelegate.getApplicationLocales();
+        String currentTag = current.isEmpty() ? "" : current.toLanguageTags();
+        int checked = 0;
+        for (int i = 0; i < tags.length; i++) {
+            if (tags[i].equalsIgnoreCase(currentTag)) { checked = i; break; }
+        }
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(R.string.menu_language)
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    String tag = tags[which];
+                    AppCompatDelegate.setApplicationLocales(tag.isEmpty()
+                            ? LocaleListCompat.getEmptyLocaleList()
+                            : LocaleListCompat.forLanguageTags(tag));
+                    d.dismiss();
+                })
+                .show();
     }
 
     /** Expert mode off: the autorun card is inaccessible - greyed text and
      *  disabled toggles, titles suffixed with (Expert). */
     private void applyExpertMode() {
         boolean ok = expertMode;
-        binding.tvAutorunTitle.setText(ok ? "Autorun" : "Autorun (Expert)");
-        binding.tvRebootTitle.setText(ok ? "Auto reboot" : "Auto reboot (Expert)");
+        binding.tvAutorunTitle.setText(ok ? getString(R.string.autorun_title)
+                : getString(R.string.autorun_title_expert));
+        binding.tvRebootTitle.setText(ok ? getString(R.string.auto_reboot_title)
+                : getString(R.string.auto_reboot_title_expert));
         binding.tvAutorunTitle.setTextColor(ok ? 0xFFFFFFFF : 0xFF6E6E6E);
         binding.tvAutorunDesc.setTextColor(ok ? 0xFF9E9E9E : 0xFF5A5A5A);
         binding.tvRebootTitle.setTextColor(ok ? 0xFFFFFFFF : 0xFF6E6E6E);
@@ -782,11 +995,11 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         else ed.putBoolean("disable_modules", true);
         ed.apply();
         binding.modulesSubtitle.setText(on
-                ? "Enabled - Active at next reroot"
-                : "Disabled - No Modules on reroot");
+                ? getString(R.string.modules_enabled)
+                : getString(R.string.modules_disabled));
         Toast.makeText(this,
-                on ? "KSU modules enabled - applies at next root"
-                        : "KSU modules disabled - applies at next root",
+                on ? getString(R.string.modules_enabled_toast)
+                        : getString(R.string.modules_disabled_toast),
                 Toast.LENGTH_SHORT).show();
     }
 
@@ -857,7 +1070,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
 
         if (apps.isEmpty()) {
             TextView none = new TextView(this);
-            none.setText("No app with libksud.so found");
+            none.setText(R.string.no_libksud_app);
             none.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
             none.setPadding((int) (20 * md), (int) (12 * md), (int) (20 * md), (int) (12 * md));
             none.setTextColor(0xFF6E6E6E);
@@ -966,25 +1179,21 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         updateRunButton();
     }
 
-    /** Run needs a manager selected, no failed-run lock and no existing root. */
+    /** Run needs a manager selected and no failed-run lock. */
     private boolean canRun() {
-        return suManagerPkg != null && !failedRun && !new File("/dev/df").exists();
+        return suManagerPkg != null && !failedRun;
     }
 
     /** Single place that decides the Run pill's look and enabled state. */
     private void updateRunButton() {
         if (running) return;
-        if (new File("/dev/df").exists()) {
-            setRootedState(true);
-            return;
-        }
         if (failedRun) {
             setFailedState();
             return;
         }
         boolean ok = suManagerPkg != null;
         binding.btnRun.setEnabled(ok);
-        binding.btnRun.setText("Run exploit");
+        binding.btnRun.setText(R.string.run_exploit);
         binding.btnRun.setTextColor(ok ? 0xFFE0E0E0 : 0xFF6E6E6E);
         binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(ok ? 0xFF7A7A7A : 0xFF1F1F1F));
         ((com.google.android.material.button.MaterialButton) binding.btnRun)
@@ -997,7 +1206,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private void checkForAppUpdate() {
         try {
             java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
-                    new java.net.URL("https://api.github.com/repos/mitschud/DirtyFrag/releases/latest")
+                    new java.net.URL("https://api.github.com/repos/" + API_REPO + "/releases/latest")
                             .openConnection();
             conn.setConnectTimeout(8000);
             conn.setReadTimeout(8000);
@@ -1053,10 +1262,10 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private void setFailedState() {
         failedRun = true;
         binding.twoStep.setFailed(true);
-        binding.twoStep.setSeg1(seg1, "Failure");
-        binding.twoStep.setSeg2(1f, "Reboot", 0xFFE57373);
+        binding.twoStep.setSeg1(seg1, getString(R.string.failure));
+        binding.twoStep.setSeg2(1f, getString(R.string.reboot), 0xFFE57373);
         binding.btnRun.setEnabled(false);
-        binding.btnRun.setText("Run exploit");
+        binding.btnRun.setText(R.string.run_exploit);
         binding.btnRun.setTextColor(0xFF6E6E6E);
         binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(0xFF1F1F1F));
         ((com.google.android.material.button.MaterialButton) binding.btnRun)
@@ -1073,7 +1282,8 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         int bg = (rooted || !ok) ? 0xFF1F1F1F : 0xFF7A7A7A;
         int stroke = (rooted || !ok) ? 0xFF1F1F1F : 0xFFA6A6A6;
         binding.btnRun.setEnabled(ok);
-        binding.btnRun.setText(rooted ? "Rooted" : "Run exploit");
+        binding.btnRun.setText(rooted ? getString(R.string.rooted)
+                : getString(R.string.run_exploit));
         binding.btnRun.setTextColor(fg);
         binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(bg));
         ((com.google.android.material.button.MaterialButton) binding.btnRun)
@@ -1216,12 +1426,12 @@ public class MainActivity extends AppCompatActivity implements IReporter {
      *  hardcoded package list that no longer matches reality. */
     private void openKsu() {
         if (suManagerPkg == null) {
-            Toast.makeText(this, "No SU manager selected", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.no_su_selected, Toast.LENGTH_SHORT).show();
             return;
         }
         Intent launch = getPackageManager().getLaunchIntentForPackage(suManagerPkg);
         if (launch == null) {
-            Toast.makeText(this, suManagerPkg + " cannot be launched",
+            Toast.makeText(this, getString(R.string.cannot_launch, suManagerPkg),
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -1278,9 +1488,9 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 // 0 ok, 1 ksud/bootstrap error, 2 poll timeout or bad setup,
                 // 3 failed to patch files (see exp.c markers[]).
                 String why = lastFailReason != null ? lastFailReason
-                        : rc == 1 ? "ksud exited with error"
-                        : rc == 2 ? "check logs"
-                        : "failed to patch files";
+                        : rc == 1 ? getString(R.string.fail_ksud)
+                        : rc == 2 ? getString(R.string.fail_check_logs)
+                        : getString(R.string.fail_patch);
                 report("\n=== exploit failed: " + why + " ===\n");
             }
             mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE)
@@ -1294,7 +1504,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 boolean rooted = new File("/dev/df").exists();
                 if (rooted) {
                     setRootedState(true);
-                    binding.twoStep.setSeg2(1f, "Verified", 0xFFFFFFFF);
+                    binding.twoStep.setSeg2(1f, getString(R.string.verified), 0xFFFFFFFF);
                 } else {
                     setFailedState();
                     setRootedState(false);
@@ -1304,11 +1514,137 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         }
     }
 
+    /** Expert aid: minimal runtime probe of the page-cache write primitive.
+     *  Runs the same write + read-back the exploit uses to decide
+     *  "DEVICE NOT VULNERABLE", but standalone and non-destructive, so you can
+     *  tell whether the device is usable before committing to a full run. */
+    private void runProbe() {
+        if (running) return;
+        running = true;
+        mExec.execute(() -> {
+            StringBuilder out = new StringBuilder();
+            try {
+                int rc = ExploitRunner.probe(mDeCtx, out::append);
+                mMain.post(() -> {
+                    String verdict = rc == 0
+                            ? getString(R.string.probe_ok)
+                            : getString(R.string.probe_failed);
+                    new androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle(R.string.probe_title)
+                            .setMessage(verdict + "\n\n" + out)
+                            .setPositiveButton(R.string.ok, null)
+                            .show();
+                });
+            } catch (Exception e) {
+                Log.e(TAG, "probe exception", e);
+                mMain.post(() -> new androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle(R.string.probe_title)
+                        .setMessage(getString(R.string.probe_error, String.valueOf(e)))
+                        .setPositiveButton(R.string.ok, null)
+                        .show());
+            } finally {
+                mMain.post(() -> running = false);
+            }
+        });
+    }
+
+    /** Expert aid: a root shell served by the console daemon bootstrap forks.
+     *  The automatic `ksud late-load` only ever runs once and the root context
+     *  that drives it lives inside bootstrap, so without this a failed
+     *  late-load cannot be retried short of a full reroot. Commands are written
+     *  to dftty.cmd and the transcript is read back from dftty.out. */
+    private void showDebugConsole() {
+        if (!new File("/dev/df").exists()) {
+            Toast.makeText(this, R.string.root_required,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        RootConsole console = new RootConsole(mDeCtx.getFilesDir());
+        console.reset();
+
+        View content = getLayoutInflater().inflate(R.layout.dialog_debug_console, null);
+        TextView output = content.findViewById(R.id.consoleOutput);
+        android.widget.ScrollView scroll = content.findViewById(R.id.consoleScroll);
+        android.widget.EditText input = content.findViewById(R.id.consoleInput);
+        View send = content.findViewById(R.id.consoleSend);
+        View dot = content.findViewById(R.id.consoleStatusDot);
+        View clear = content.findViewById(R.id.consoleClear);
+        TextView subtitle = content.findViewById(R.id.consoleSubtitle);
+
+        output.setText("");
+        final String ksudCmd = "/data/user_de/0/df.root/ksud late-load --package-name "
+                + (suManagerPkg != null ? suManagerPkg : "<pkg>");
+        input.setText(ksudCmd);
+        input.setSelection(input.getText().length());
+        subtitle.setText(suManagerPkg != null
+                ? "uid 0 · " + suManagerPkg : "uid 0 · no manager");
+
+        final androidx.appcompat.app.AlertDialog dialog =
+                new androidx.appcompat.app.AlertDialog.Builder(this).setView(content).create();
+
+        final boolean[] busy = {false};
+        Runnable submit = () -> {
+            String cmd = input.getText().toString().trim();
+            if (cmd.isEmpty() || busy[0]) return;
+            input.setText("");
+            output.append("$ " + cmd + "\n");
+            scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+            busy[0] = true;
+            mExec.execute(() -> {
+                String res = console.run(cmd, 60000);
+                boolean alive = !res.startsWith("(no response");
+                mMain.post(() -> {
+                    output.append(res + "\n\n");
+                    scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+                    dot.setBackgroundTintList(ColorStateList.valueOf(
+                            alive ? 0xFF7BD88F : 0xFFE5A663));
+                    busy[0] = false;
+                });
+            });
+        };
+
+        send.setOnClickListener(v -> {
+            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            submit.run();
+        });
+        input.setOnEditorActionListener((v, actionId, event) -> {
+            submit.run();
+            return true;
+        });
+        clear.setOnClickListener(v -> {
+            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            output.setText("");
+        });
+        content.findViewById(R.id.consoleChipId).setOnClickListener(v -> fillInput(input, "id"));
+        content.findViewById(R.id.consoleChipKsud).setOnClickListener(v -> fillInput(input, ksudCmd));
+        content.findViewById(R.id.consoleChipLs).setOnClickListener(v -> fillInput(input, "ls /data/adb"));
+        content.findViewById(R.id.consoleChipEnforce).setOnClickListener(v -> fillInput(input, "getenforce"));
+
+        dialog.setOnShowListener(d -> {
+            android.view.Window w = dialog.getWindow();
+            if (w == null) return;
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                    android.graphics.Color.TRANSPARENT));
+            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.94f),
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+            w.setSoftInputMode(android.view.WindowManager.LayoutParams
+                    .SOFT_INPUT_ADJUST_RESIZE);
+        });
+        dialog.show();
+    }
+
+    private void fillInput(android.widget.EditText input, String cmd) {
+        input.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        input.setText(cmd);
+        input.setSelection(input.getText().length());
+        input.requestFocus();
+    }
+
     private void openUrl(String url) {
         try {
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
         } catch (Exception e) {
-            Toast.makeText(this, "No browser found", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.no_browser, Toast.LENGTH_SHORT).show();
         }
     }
 

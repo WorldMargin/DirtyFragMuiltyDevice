@@ -17,6 +17,14 @@ app/keystore.jks
 *.log
 apk/
 
+# IDE / build misc
+.kotlin/
+*.hprof
+captures/
+
+# internal session handoff notes (kept locally, not published)
+HANDOFF.md
+
 # LKM build artifacts
 lkm/*.cmd
 lkm/*.o

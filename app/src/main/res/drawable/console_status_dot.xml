@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Console liveness dot: green while the daemon answers, recoloured amber
+     from code when a command times out. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#FF7BD88F" />
+</shape>
