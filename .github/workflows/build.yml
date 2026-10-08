@@ -64,11 +64,11 @@ jobs:
 
       - name: Create signing.properties
         run: |
-          echo KEYSTORE_FILE=../keystore.jks > signing.properties
+          echo KEYSTORE_FILE=keystore.jks > signing.properties
           echo KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }} >> signing.properties
           echo KEY_ALIAS=${{ secrets.KEY_ALIAS }} >> signing.properties
           echo KEY_PASSWORD=${{ secrets.KEY_PASSWORD }} >> signing.properties
-          echo ${{ secrets.KEYSTORE }} | base64 --decode > keystore.jks
+          echo ${{ secrets.KEYSTORE }} | base64 --decode > app/keystore.jks
 
       - name: Download DF LKMs
         uses: actions/download-artifact@v7
@@ -91,10 +91,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: DFRoot
-          path: app/build/outputs/apk/release/DFRoot_*.apk
+          path: app/build/outputs/apk/release/dirtyfrag.apk
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: app/build/outputs/apk/release/DFRoot_*.apk
+          files: app/build/outputs/apk/release/dirtyfrag.apk

@@ -37,7 +37,7 @@
     <!-- Log card -->
     <string name="advanced_log_title">Show advanced log</string>
     <string name="advanced_log_desc">Shows full scrollable log</string>
-    <string name="cd_save_log">Save log to Downloads</string>
+    <string name="cd_save_log">Share log</string>
 
     <!-- Run / status -->
     <string name="run_exploit">Run exploit</string>
@@ -55,6 +55,12 @@
     <string name="menu_debug_console">Debug console</string>
     <string name="menu_test_primitive">Test primitive</string>
     <string name="menu_language">Language</string>
+    <string name="menu_export_log">Export log</string>
+    <string name="menu_clear_log">Clear log</string>
+    <string name="log_empty">No log to export yet</string>
+    <string name="log_cleared">Log cleared</string>
+    <string name="share_log">Share log</string>
+    <string name="share_log_subject">DirtyFrag log</string>
     <string name="menu_remove_ksu">Remove KSU/KSUD</string>
     <string name="menu_click_3">Click 3 times</string>
     <string name="menu_click_2">Click 2 times</string>
@@ -77,7 +83,6 @@
     <!-- Toasts -->
     <string name="no_su_selected">No SU manager selected</string>
     <string name="cannot_launch">%1$s cannot be launched</string>
-    <string name="root_required">Root required - run the exploit first</string>
     <string name="no_browser">No browser found</string>
 
     <!-- Exploit failure reasons -->
@@ -86,14 +91,16 @@
     <string name="fail_patch">failed to patch files</string>
 
     <!-- Debug console -->
-    <string name="console_title">ROOT CONSOLE</string>
-    <string name="console_subtitle_default">uid 0 · /system/bin/sh</string>
-    <string name="console_subtitle_manager">uid 0 · %1$s</string>
-    <string name="console_subtitle_none">uid 0 · no manager</string>
-    <string name="console_clear">Clear</string>
-    <string name="console_hint">shell command</string>
-    <string name="cd_run">Run</string>
     <string name="cd_open_su">Open SU manager</string>
     <string name="cd_open">Open</string>
     <string name="manager_label">Manager</string>
+
+    <!-- Terminal (vendored Termux terminal-emulator / terminal-view) -->
+    <string name="copy_text">Copy</string>
+    <string name="paste_text">Paste</string>
+    <string name="text_selection_more">More…</string>
+    <string name="terminal_title">ROOT SHELL</string>
+    <string name="terminal_run_root">su</string>
+    <string name="terminal_run_sh">sh</string>
+    <string name="terminal_close">Close</string>
 </resources>

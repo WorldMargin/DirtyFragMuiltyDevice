@@ -197,7 +197,7 @@
 
                 </LinearLayout>
 
-                <df.root.OneUiSwitch
+                <com.worldmargin.dfroot.OneUiSwitch
                     android:id="@+id/switchBootStart"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -237,7 +237,7 @@
 
                 </LinearLayout>
 
-                <df.root.OneUiSwitch
+                <com.worldmargin.dfroot.OneUiSwitch
                     android:id="@+id/switchAutoSoftReboot"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -298,7 +298,7 @@
 
             </LinearLayout>
 
-            <df.root.OneUiSwitch
+            <com.worldmargin.dfroot.OneUiSwitch
                 android:id="@+id/switchModules"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -357,7 +357,7 @@
 
             </LinearLayout>
 
-            <df.root.OneUiSwitch
+            <com.worldmargin.dfroot.OneUiSwitch
                 android:id="@+id/switchAdvancedLog"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -395,7 +395,7 @@
     </ScrollView>
 
     <!-- OneUI-style bottom fade over the log -->
-    <df.root.BottomFadeView
+    <com.worldmargin.dfroot.BottomFadeView
         android:id="@+id/bottomFade"
         android:layout_width="0dp"
         android:layout_height="400dp"
@@ -406,7 +406,7 @@
         app:layout_constraintStart_toStartOf="parent" />
 
     <!-- OneUI-update-style two-step progress bar -->
-    <df.root.TwoStepProgressView
+    <com.worldmargin.dfroot.TwoStepProgressView
         android:id="@+id/twoStep"
         android:layout_width="0dp"
         android:layout_height="wrap_content"

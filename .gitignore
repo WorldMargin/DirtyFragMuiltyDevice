@@ -39,6 +39,7 @@ lkm/Module.symvers
 out/
 app/src/main/jni/splicehelper
 app/src/main/jni/ko/*.ko
+app/src/main/jni/tests/dftty_test
 
 # stale APK copies dropped at the repo root by hand
 /dirtyfrag.apk

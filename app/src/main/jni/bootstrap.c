@@ -1,3 +1,6 @@
+#include "dftty.h"
+#include "dflog.h"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -9,11 +12,12 @@
 #include <unistd.h>
 
 #define BLKROSET   0x125d
-#define KSUD       "/data/user_de/0/df.root/ksud"
-#define PREFS_PATH "/data/user_de/0/df.root/shared_prefs/dfroot.xml"
+/* The manager's own ksud is used in place; its path (the manager app's
+ * libksud.so) is resolved by the Java side and handed over through prefs. This
+ * is only a fallback for when that pref is missing. */
+#define KSUD_FALLBACK "/data/adb/ksud"
+#define PREFS_PATH "/data/user_de/0/com.worldmargin.dfroot/shared_prefs/dfroot.xml"
 #define MODULES_DIR "/data/adb/modules"
-#define DFTTY_CMD  "/data/user_de/0/df.root/files/dftty.cmd"
-#define DFTTY_OUT  "/data/user_de/0/df.root/files/dftty.out" 
 
 static int pref_true(const char *buf, const char *key)
 {
@@ -26,8 +30,26 @@ static int pref_true(const char *buf, const char *key)
     return v && tag_end && v < tag_end;
 }
 
-static int read_prefs(char *su_manager, size_t su_manager_size, int *soft_reboot,
-                      int *disable_modules)
+/* Extracts <string name="key">VALUE</string> from a decoded prefs XML blob.
+ * Returns 0 on success, -1 when the key is absent. */
+static int pref_str(const char *buf, const char *key, char *out, size_t out_size)
+{
+    char needle[64];
+    snprintf(needle, sizeof(needle), "name=\"%s\">", key);
+    char *p = strstr(buf, needle);
+    if (!p) return -1;
+    p += strlen(needle);
+    char *end = strchr(p, '<');
+    if (!end) return -1;
+    size_t len = end - p;
+    if (len == 0 || len >= out_size) return -1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+    return 0;
+}
+
+static int read_prefs(char *su_manager, size_t su_manager_size, char *ksud_path,
+                      size_t ksud_path_size, int *soft_reboot, int *disable_modules)
 {
     int fd = open(PREFS_PATH, O_RDONLY);
     if (fd < 0) return -1;
@@ -38,15 +60,10 @@ static int read_prefs(char *su_manager, size_t su_manager_size, int *soft_reboot
     if (n <= 0) return -1;
     buf[n] = '\0';
 
-    char *p = strstr(buf, "name=\"su_manager\">");
-    if (!p) return -1;
-    p += strlen("name=\"su_manager\">");
-    char *end = strchr(p, '<');
-    if (!end) return -1;
-    size_t len = end - p;
-    if (len == 0 || len >= su_manager_size) return -1;
-    memcpy(su_manager, p, len);
-    su_manager[len] = '\0';
+    if (pref_str(buf, "su_manager", su_manager, su_manager_size) != 0)
+        return -1;
+    if (pref_str(buf, "ksud_path", ksud_path, ksud_path_size) != 0)
+        ksud_path[0] = '\0';
 
     *soft_reboot = pref_true(buf, "soft_reboot");
     *disable_modules = pref_true(buf, "disable_modules");
@@ -167,170 +184,74 @@ static int disable_modules(void)
  * `ksud late-load` fails that leaves the user with no root and no way to
  * retry short of a full reroot.
  *
- * Fork a detached root daemon that watches a command file the app writes and
- * runs each command through /system/bin/sh, appending the transcript to a
- * result file the app reads back. That gives the in-app debug console a root
- * shell even when ksud failed, so a manual `ksud late-load` is possible.
- *
- * Wire format (sequence-tagged so a reply maps to its request):
- *   dftty.cmd : "<<<cmd:N>>>\n<command>\n"
- *   dftty.out : "<<<begin:N>>>\n<output>\n<<<done:N>>> rc=R\n"
+ * See dftty.c for the daemon that gives the in-app debug console a root shell
+ * even when ksud failed, so a manual `ksud late-load` is possible.
  */
-static void dftty_exec_to_fd(const char *cmd, int out_fd, int *rc)
-{
-    int pfd[2];
-    if (pipe(pfd) < 0) { *rc = -1; return; }
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pfd[0]);
-        close(pfd[1]);
-        *rc = -1;
-        return;
-    }
-    if (pid == 0) {
-        dup2(pfd[1], STDOUT_FILENO);
-        dup2(pfd[1], STDERR_FILENO);
-        close(pfd[0]);
-        close(pfd[1]);
-        char *argv[] = { "sh", "-c", (char *)cmd, NULL };
-        execv("/system/bin/sh", argv);
-        _exit(127);
-    }
-    close(pfd[1]);
-
-    char buf[1024];
-    ssize_t n;
-    while ((n = read(pfd[0], buf, sizeof(buf))) > 0)
-        write(out_fd, buf, (size_t)n);
-    close(pfd[0]);
-
-    int status = 0;
-    waitpid(pid, &status, 0);
-    *rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-static void dftty_run(const char *cmd, long seq)
-{
-    /* Bound the transcript so a chatty command cannot grow it forever. */
-    struct stat st;
-    if (stat(DFTTY_OUT, &st) == 0 && st.st_size > 262144) {
-        int t = open(DFTTY_OUT, O_WRONLY | O_TRUNC);
-        if (t >= 0) close(t);
-    }
-
-    int fd = open(DFTTY_OUT, O_WRONLY | O_CREAT | O_APPEND, 0666);
-    if (fd < 0) return;
-    fchmod(fd, 0666);
-
-    char hdr[48];
-    int len = snprintf(hdr, sizeof(hdr), "<<<begin:%ld>>>\n", seq);
-    if (len > 0) write(fd, hdr, (size_t)len);
-
-    int rc;
-    dftty_exec_to_fd(cmd, fd, &rc);
-
-    char ftr[64];
-    len = snprintf(ftr, sizeof(ftr), "\n<<<done:%ld>>> rc=%d\n", seq, rc);
-    if (len > 0) write(fd, ftr, (size_t)len);
-    close(fd);
-}
-
-static void dftty_serve_once(long *last_seq)
-{
-    int fd = open(DFTTY_CMD, O_RDONLY);
-    if (fd < 0) return;
-    char buf[8192];
-    int n = (int)read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n <= 0) return;
-    buf[n] = '\0';
-
-    if (strncmp(buf, "<<<cmd:", 7) != 0) return;
-    char *endp = NULL;
-    long seq = strtol(buf + 7, &endp, 10);
-    if (!endp || strncmp(endp, ">>>\n", 4) != 0) return;
-    if (seq == *last_seq) return;
-    *last_seq = seq;
-    if (endp[4] != '\0')
-        dftty_run(endp + 4, seq);
-}
-
-static void dftty_loop(void)
-{
-    /* Fresh session: truncate both files so a reboot can never re-run the last
-     * command the user typed, and the app starts from an empty transcript. */
-    int fd = open(DFTTY_CMD, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (fd >= 0) { fchmod(fd, 0666); close(fd); }
-    fd = open(DFTTY_OUT, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (fd >= 0) { fchmod(fd, 0666); close(fd); }
-
-    long last_seq = -1;
-    for (;;) {
-        dftty_serve_once(&last_seq);
-        usleep(150000);
-    }
-}
-
-/* Detach the console daemon so bootstrap can still run ksud and return (which
- * lets the LKM's UMH_WAIT_PROC finish and unload the module) while the
- * console keeps running as root. */
-static void dftty_start(void)
-{
-    pid_t pid = fork();
-    if (pid != 0) return;
-
-    setsid();
-    int devnull = open("/dev/null", O_RDWR);
-    if (devnull >= 0) {
-        dup2(devnull, STDIN_FILENO);
-        dup2(devnull, STDOUT_FILENO);
-        dup2(devnull, STDERR_FILENO);
-        if (devnull > 2) close(devnull);
-    }
-    dftty_loop();
-    _exit(0);
-}
 
 int main(void)
 {
+    dflog("boot", "bootstrap start pid=%d", (int)getpid());
+
     /* Start the root debug console first so it is available even if a later
      * step (including ksud late-load) fails - that is the whole point. */
     dftty_start();
+    touch("/dev/dfmc");
+    dflog("boot", "root console daemon requested");
 
     char su_manager[256];
+    char ksud_path[512];
     int soft_reboot, disable_mods;
-    if (read_prefs(su_manager, sizeof(su_manager), &soft_reboot, &disable_mods) != 0) {
+    if (read_prefs(su_manager, sizeof(su_manager), ksud_path, sizeof(ksud_path),
+                   &soft_reboot, &disable_mods) != 0) {
+        dflog("boot", "read prefs failed (%s)", PREFS_PATH);
         touch("/dev/dfme0");
         return 1;
     }
     touch("/dev/dfm1");
+    dflog("boot", "prefs: su_manager=%s soft_reboot=%d disable_modules=%d",
+          su_manager, soft_reboot, disable_mods);
+
+    const char *ksud = ksud_path[0] ? ksud_path : KSUD_FALLBACK;
+    dflog("boot", "ksud = %s", ksud);
 
     touch("/dev/dfm7");
-    if (adopt_zygote_env() == 0)
+    if (adopt_zygote_env() == 0) {
         touch("/dev/dfm2");
-    else
+        dflog("boot", "adopted zygote env");
+    } else {
         touch("/dev/dfmw0");
+        dflog("boot", "WARNING: adopt zygote env failed");
+    }
 
     touch("/dev/dfm8");
-    if (set_partitions_ro() == 0)
+    if (set_partitions_ro() == 0) {
         touch("/dev/dfm3");
-    else
+        dflog("boot", "partitions set ro");
+    } else {
         touch("/dev/dfmw1");
+        dflog("boot", "WARNING: set partitions ro failed");
+    }
 
-    if (disable_mods && disable_modules() != 0)
+    if (disable_mods && disable_modules() != 0) {
         touch("/dev/dfmw2");
+        dflog("boot", "WARNING: disable modules failed");
+    }
 
     touch("/dev/dfm4");
     char **late_load;
     if (soft_reboot)
-        late_load = (char *[]){ KSUD, "late-load", "--package-name", su_manager, "--soft-reboot", NULL };
+        late_load = (char *[]){ (char *)ksud, "late-load", "--package-name", su_manager, "--soft-reboot", NULL };
     else
-        late_load = (char *[]){ KSUD, "late-load", "--package-name", su_manager, NULL };
-    if (run(late_load) == 0)
+        late_load = (char *[]){ (char *)ksud, "late-load", "--package-name", su_manager, NULL };
+    dflog("boot", "running ksud late-load (soft_reboot=%d)", soft_reboot);
+    int rc = run(late_load);
+    if (rc == 0) {
         touch("/dev/dfm5");
-    else
+        dflog("boot", "ksud late-load OK");
+    } else {
         touch("/dev/dfme1");
+        dflog("boot", "ksud late-load failed rc=%d", rc);
+    }
 
     return 0;
 }

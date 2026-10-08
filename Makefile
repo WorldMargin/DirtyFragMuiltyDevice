@@ -21,12 +21,12 @@ DDK_WF      := .github/workflows/build.yml
 DDK_IMAGE   ?= $(shell awk '/image: ghcr\.io\//{gsub(/.*image: /,"");gsub(/:.*$$/,"");print;exit}' $(DDK_WF))
 DDK_RELEASE ?= $(shell awk '/image: ghcr\.io\/ylarod\/ddk-min:/{sub(/.*-/,"");print;exit}' $(DDK_WF))
 
-SIGN_PASS  := df-ksu
-SIGN_ALIAS := df-ksu
+SIGN_PASS  := worldmargin
+SIGN_ALIAS := worldmargin
 
 LKM_SRCS    := lkm/dfroot.c lkm/Makefile
 LKM_KOS     := $(KMIS:%=app/src/main/jni/ko/dfroot-%.ko)
-APK_SRCS    := $(wildcard app/src/main/java/df/root/*.java \
+APK_SRCS    := $(wildcard app/src/main/java/com/worldmargin/dfroot/*.java \
                                app/src/main/jni/*.c app/src/main/jni/*.h \
                                app/src/main/jni/*.S app/src/main/jni/*.inc \
                                app/src/main/res/layout/*.xml \
@@ -41,14 +41,14 @@ APK   := out/DFRoot.apk
 
 all: $(APK)
 
-keystore.jks:
-	keytool -genkeypair -keystore $@ -storetype JKS \
+app/keystore.jks:
+	keytool -genkeypair -keystore $@ -storetype PKCS12 \
 	    -storepass $(SIGN_PASS) -keypass $(SIGN_PASS) \
-	    -alias $(SIGN_ALIAS) -keyalg RSA -keysize 2048 -validity 10000 \
-	    -dname "CN=DFRoot"
+	    -alias $(SIGN_ALIAS) -keyalg RSA -keysize 4096 -validity 10000 \
+	    -dname "CN=WorldMargin"
 
-signing.properties: keystore.jks
-	printf 'KEYSTORE_FILE=../keystore.jks\nKEYSTORE_PASSWORD=%s\nKEY_ALIAS=%s\nKEY_PASSWORD=%s\n' \
+signing.properties: app/keystore.jks
+	printf 'KEYSTORE_FILE=keystore.jks\nKEYSTORE_PASSWORD=%s\nKEY_ALIAS=%s\nKEY_PASSWORD=%s\n' \
 	    $(SIGN_PASS) $(SIGN_ALIAS) $(SIGN_PASS) > $@
 
 $(LKM_KOS): $(LKM_SRCS)
@@ -80,7 +80,7 @@ $(APK): signing.properties $(LKM_KOS) $(APK_SRCS)
 	@printf '\033[1;35m  → gradle assembleRelease\033[0m\n'
 	./gradlew :app:assembleRelease
 	mkdir -p $(dir $@)
-	cp app/build/outputs/apk/release/DFRoot_*.apk $@
+	cp app/build/outputs/apk/release/dirtyfrag.apk $@
 	@printf '\033[1;32m  ✔  DFRoot APK  →  $@\033[0m\n'
 
 clean:

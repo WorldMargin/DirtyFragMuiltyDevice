@@ -1,4 +1,4 @@
-package df.root;
+package com.worldmargin.dfroot;
 
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
@@ -19,7 +19,7 @@ import java.io.File;
  * Since upstream 3.2 the exploit binary no longer takes a soft-reboot flag:
  * the LKM execs "bootstrap", which reads soft_reboot / su_manager /
  * disable_modules directly out of the device-encrypted prefs at
- * /data/user_de/0/df.root/shared_prefs/dfroot.xml. BootReceiver therefore
+ * /data/user_de/0/com.worldmargin.dfroot/shared_prefs/dfroot.xml. BootReceiver therefore
  * mirrors the user's choice into that key before starting the run.
  */
 public class BootReceiver extends BroadcastReceiver implements IReporter {
@@ -28,20 +28,25 @@ public class BootReceiver extends BroadcastReceiver implements IReporter {
     @Override
     public void report(String msg) {
         Log.i(TAG, msg.trim());
+        DiagLog.d("native", msg.trim());
     }
 
     @Override
     public void onReceive(Context context, Intent intent) {
+        DiagLog.init(context);
         if (new File("/dev/df").exists()) {
             Log.i(TAG, "boot: already hooked, skipping");
+            DiagLog.d("boot", "already hooked, skipping");
             return;
         }
         Log.i(TAG, "boot: " + intent.getAction());
+        DiagLog.d("boot", "receive " + intent.getAction());
         final Context deCtx = context.createDeviceProtectedStorageContext();
         boolean expert = deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)
                 .getBoolean("expert_mode", false);
         if (!expert) {
             Log.i(TAG, "boot: expert mode off - autorun skipped");
+            DiagLog.d("boot", "expert mode off - autorun skipped");
             return;
         }
         boolean autoSoftReboot = deCtx.getSharedPreferences("dfroot", Context.MODE_PRIVATE)

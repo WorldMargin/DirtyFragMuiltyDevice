@@ -73,7 +73,7 @@ the point - it is the escape hatch when a module is the thing that is crashing t
 
 A: Android usually detects the bootloop and offers Safe Mode; otherwise hold **Volume Down** during
 boot. From Safe Mode turn Autorun off and set KernelSU Modules to Disabled, or just uninstall
-DirtyFrag until you stabilise. If you cannot get far enough into the system, `adb uninstall df.root`
+DirtyFrag until you stabilise. If you cannot get far enough into the system, `adb uninstall com.worldmargin.dfroot`
 from any PC works on user builds without root.
 
 **Q: The progress bar sits at 0 percent**

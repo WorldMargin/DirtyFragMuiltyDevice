@@ -54,9 +54,14 @@ set_source_files_properties(exp.c PROPERTIES
 target_link_libraries(dfroot log)
 target_link_options(dfroot PRIVATE -Wl,-z,max-page-size=16384)
 
-add_executable(bootstrap bootstrap.c)
+add_executable(bootstrap bootstrap.c dftty.c)
 set_target_properties(bootstrap PROPERTIES
     PREFIX "lib"
     SUFFIX ".so"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
 target_link_options(bootstrap PRIVATE -Wl,-z,max-page-size=16384)
+
+# Vendored Termux PTY shim: com.termux.terminal.JNI does
+# System.loadLibrary("termux"), so the module must be named "termux".
+add_library(termux SHARED termux.c)
+target_link_options(termux PRIVATE -Wl,-z,max-page-size=16384)

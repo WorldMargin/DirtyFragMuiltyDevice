@@ -39,6 +39,11 @@ Third-party components
   * KernelSU and ksud integration (GPL-3.0)
       https://github.com/tiann/KernelSU
 
+  * Terminal emulator and terminal view (GPL-3.0)
+      Vendored source from termux/termux-app v0.118.0
+      (modules: terminal-emulator, terminal-view)
+      https://github.com/termux/termux-app
+
   * Android NDK / AOSP headers and runtime pieces, under their respective
     licenses.
 

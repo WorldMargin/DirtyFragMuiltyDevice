@@ -1,4 +1,4 @@
-package df.root;
+package com.worldmargin.dfroot;
 
 import android.content.Context;
 import android.content.ComponentName;
@@ -30,7 +30,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.os.LocaleListCompat;
 
-import df.root.databinding.ActivityMainBinding;
+import com.worldmargin.dfroot.databinding.ActivityMainBinding;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -89,11 +89,28 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private boolean updateAvailable;
     private boolean moduleRefresh;
 
+    /** SAF "Save as" launcher for the log export; text is staged in
+     *  pendingExportText, written once the user picks a destination. */
+    private androidx.activity.result.ActivityResultLauncher<String> exportLauncher;
+    private String pendingExportText;
+
+    /** The embedded terminal's view, so the session client can ask it to redraw
+     *  when new output arrives (TerminalView only repaints on invalidate()). */
+    private com.termux.view.TerminalView mTermView;
+
+    /** Terminal session client (clipboard + logs) shared by the embedded
+     *  terminal's pty sessions. */
+    private final TermClient mTermClient = new TermClient();
+
+    /** Terminal font size in dp. On a phone the Termux default (14) renders too
+     *  small, so start much larger; pinch-to-zoom adjusts it at runtime. */
+    private int mTermTextSize = 44;
+
     /** Device-protected storage context: bootstrap.c reads its prefs from
-     *  /data/user_de/0/df.root/, so every pref the exploit depends on must live
+     *  /data/user_de/0/com.worldmargin.dfroot/, so every pref the exploit depends on must live
      *  there, not in credential-protected storage. */
     private Context mDeCtx;
-    /** Package name of the SU manager whose libksud.so gets staged, or null. */
+    /** Package name of the SU manager whose ksud (libksud.so) is used, or null. */
     private String suManagerPkg;
     private CharSequence suManagerLabel;
     /** A failed run locks the Run button until reboot (page-cache patch). */
@@ -104,6 +121,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     @Override
     public void report(String msg) {
         Log.i(TAG, msg.trim());
+        DiagLog.d("native", msg.trim());
         mMain.post(() -> {
             // Drive the two-step progress bar from the raw (unfiltered) lines.
             for (String line : msg.split("\n", -1)) {
@@ -371,6 +389,17 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         mDeCtx = createDeviceProtectedStorageContext();
+        DiagLog.init(this);
+        DiagLog.d("app", "onCreate");
+        // Register before the activity is started; the export row triggers it.
+        exportLauncher = registerForActivityResult(
+                new androidx.activity.result.contract.ActivityResultContracts
+                        .CreateDocument("text/plain"),
+                uri -> {
+                    if (uri != null && pendingExportText != null)
+                        writeTextToUri(uri, pendingExportText);
+                    pendingExportText = null;
+                });
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
 
@@ -392,10 +421,10 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         // D2 vault status (Samsung VaultKeeper): Odin flashing allowed or
         // locked. Read-only; non-Samsung devices show "not available".
 
-        // SU Manager card: upstream 3.2 deleted the bundled assets/ksud, so the
-        // exploit stages libksud.so out of the chosen manager's
-        // nativeLibraryDir and refuses to run without one. Only apps that
-        // actually ship that library are offered.
+        // SU Manager card: upstream 3.2 deleted the bundled assets/ksud, and this
+        // fork goes further - it no longer stages its own ksud at all. The chosen
+        // manager's libksud.so is used in place (bootstrap is told its path), so
+        // only apps that ship that library are offered.
         loadSuManagerPref();
         binding.rowSuManager.setOnClickListener(v -> {
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
@@ -611,10 +640,9 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             box.addView(exRow, new android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
 
-            // -- Debug console row: opens a root shell served by the daemon
-            //    bootstrap forks. The root context only exists inside bootstrap,
-            //    so this is the only way to manually retry a failed ksud
-            //    late-load without a full reroot. --
+            // -- Terminal row: opens a real pty-backed terminal (vendored Termux
+            //    terminal-emulator/view) running su or sh. Unlike a line-based
+            //    prompt this keeps cwd/env/history and runs interactive tools. --
             TextView dbgRow = new TextView(this);
             dbgRow.setBackgroundResource(R.drawable.menu_row_highlight);
             dbgRow.setText(R.string.menu_debug_console);
@@ -625,7 +653,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             dbgRow.setOnClickListener(v2 -> {
                 v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
                 if (pwRef[0] != null) pwRef[0].dismiss();
-                showDebugConsole();
+                showTerminal();
             });
             box.addView(dbgRow, new android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
@@ -662,6 +690,42 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 showLanguageDialog();
             });
             box.addView(langRow, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
+
+            // -- Export log row: saves the diagnostic log (dfroot.log, Java +
+            //    native) to Downloads so a tester can send it back. Pull it by
+            //    adb instead with:
+            //    adb pull /sdcard/Android/data/com.worldmargin.dfroot/files/dfroot.log --
+            TextView expRow = new TextView(this);
+            expRow.setBackgroundResource(R.drawable.menu_row_highlight);
+            expRow.setText(R.string.menu_export_log);
+            expRow.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            expRow.setPadding((int) (20 * md), 0, 0, 0);
+            expRow.setTextColor(0xFFE8E8E8);
+            expRow.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            expRow.setOnClickListener(v2 -> {
+                v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                if (pwRef[0] != null) pwRef[0].dismiss();
+                exportDiagLog();
+            });
+            box.addView(expRow, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
+
+            // -- Clear log row: wipes the on-screen log, the saved run log and
+            //    the diagnostic log (dfroot.log) from the device. --
+            TextView clrRow = new TextView(this);
+            clrRow.setBackgroundResource(R.drawable.menu_row_highlight);
+            clrRow.setText(R.string.menu_clear_log);
+            clrRow.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
+            clrRow.setPadding((int) (20 * md), 0, 0, 0);
+            clrRow.setTextColor(0xFFE8E8E8);
+            clrRow.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+            clrRow.setOnClickListener(v2 -> {
+                v2.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                if (pwRef[0] != null) pwRef[0].dismiss();
+                clearLogs();
+            });
+            box.addView(clrRow, new android.widget.LinearLayout.LayoutParams(
                     android.view.ViewGroup.LayoutParams.MATCH_PARENT, (int) (46 * md)));
 
             // -- Remove KSU/KSUD row: 3-tap confirm, greyed out until a manager
@@ -771,6 +835,20 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                             android.view.ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, (int) md));
             sep5Lp.setMargins((int) (20 * md), 0, (int) (20 * md), 0);
             box.addView(sep5, 9, sep5Lp);
+            android.view.View sep6 = new android.view.View(this);
+            sep6.setBackgroundColor(0xFF3F3F3F);
+            android.widget.LinearLayout.LayoutParams sep6Lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, (int) md));
+            sep6Lp.setMargins((int) (20 * md), 0, (int) (20 * md), 0);
+            box.addView(sep6, 11, sep6Lp);
+            android.view.View sep7 = new android.view.View(this);
+            sep7.setBackgroundColor(0xFF3F3F3F);
+            android.widget.LinearLayout.LayoutParams sep7Lp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            android.view.ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, (int) md));
+            sep7Lp.setMargins((int) (20 * md), 0, (int) (20 * md), 0);
+            box.addView(sep7, 13, sep7Lp);
 
             box.setOutlineProvider(new android.view.ViewOutlineProvider() {
                 @Override
@@ -844,17 +922,22 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private void runSupportCheck() {
         if (running) return;
         setSupportBanner(R.string.support_checking, 0xFFB0B0B0);
-        final int[] kmi = parseKmi(kernelRelease());
+        final String release = kernelRelease();
+        final int[] kmi = parseKmi(release);
+        DiagLog.d("support", "kernel=" + release
+                + " kmi=" + (kmi == null ? "unparsed" : kmiLabel(kmi)));
         mExec.execute(() -> {
             int rc;
             try {
                 rc = ExploitRunner.probe(mDeCtx, s -> { });
             } catch (Exception e) {
                 Log.e(TAG, "support check failed", e);
+                DiagLog.e("support", "probe exception", e);
                 mMain.post(() -> setSupportBanner(R.string.support_unknown, 0xFFE5A663));
                 return;
             }
             final int r = rc;
+            DiagLog.d("support", "probe rc=" + r);
             mMain.post(() -> {
                 if (r != 0) {
                     setSupportBanner(R.string.support_unsupported, 0xFFE57373);
@@ -1017,8 +1100,8 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     }
 
     /** Every installed app carrying libksud.so in its native lib dir - exactly
-     *  the set ExploitRunner.stageAssets() can use, so anything listed here is
-     *  guaranteed to pass the runtime check too. */
+     *  the set whose ksud (libksud.so) ExploitRunner can point bootstrap at, so
+     *  anything listed here is a usable manager. */
     private List<SuManagerEntry> scanSuManagers() {
         List<SuManagerEntry> out = new ArrayList<>();
         PackageManager pm = getPackageManager();
@@ -1448,31 +1531,99 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 | Math.round(ab + (bb - ab) * t);
     }
 
-    /** Saves the current log to Downloads and opens the Downloads screen. */
+    /** The full log a tester needs: the on-device diagnostic log (dfroot.log,
+     *  Java + native, written by DiagLog.java / dflog.h) plus the run log shown
+     *  in the UI. The root console daemon may have been forced onto the
+     *  device-protected copy of dfroot.log, so both copies are merged. */
+    private String collectLog() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(DiagLog.readAll());
+
+        File deLog = new File(createDeviceProtectedStorageContext().getFilesDir(), "dfroot.log");
+        if (deLog.exists()) {
+            try (java.io.FileInputStream in = new java.io.FileInputStream(deLog)) {
+                byte[] buf = new byte[8192];
+                for (int n; (n = in.read(buf)) != -1; ) sb.append(
+                        new String(buf, 0, n, java.nio.charset.StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                Log.e(TAG, "read diag log failed", e);
+            }
+        }
+        String runLog = logBuffer.length() > 0 ? logBuffer.toString() : readLastLog();
+        if (!runLog.trim().isEmpty()) {
+            sb.append("\n=== run log ===\n").append(runLog);
+        }
+        return sb.toString();
+    }
+
+    /** Bottom share circle: hands the log to the system share sheet as a text
+     *  file attachment (ACTION_SEND), so it can go to mail / chat / cloud. */
     private void shareLog() {
-        String log = logBuffer.length() > 0 ? logBuffer.toString() : readLastLog();
+        String log = collectLog();
         if (log.trim().isEmpty()) {
+            Toast.makeText(this, R.string.log_empty, Toast.LENGTH_SHORT).show();
             return;
         }
+        DiagLog.d("app", "share log (" + log.length() + " chars)");
         try {
-            ContentValues values = new ContentValues();
-            values.put(MediaStore.Downloads.DISPLAY_NAME, "dirtyfrag_log.txt");
-            values.put(MediaStore.Downloads.MIME_TYPE, "text/plain");
-            Uri uri = getContentResolver().insert(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-            if (uri != null) {
-                try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
-                    out.write(log.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                }
+            File cache = new File(getCacheDir(), "dirtyfrag_log.txt");
+            try (FileOutputStream out = new FileOutputStream(cache)) {
+                out.write(log.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", cache);
+
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_SUBJECT, getString(R.string.share_log_subject));
+            send.putExtra(Intent.EXTRA_STREAM, uri);
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(send, getString(R.string.share_log)));
+        } catch (Exception e) {
+            Log.e(TAG, "share log failed", e);
+            Toast.makeText(this, e.toString(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** Menu "Export log": opens the system "Save to…" dialog (SAF) so the user
+     *  picks the destination and file name. */
+    private void exportDiagLog() {
+        String log = collectLog();
+        if (log.trim().isEmpty()) {
+            Toast.makeText(this, R.string.log_empty, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        pendingExportText = log;
+        exportLauncher.launch("dirtyfrag_diag_log.txt");
+    }
+
+    /** Writes text to a user-picked SAF uri. "wt" truncates any existing file. */
+    private void writeTextToUri(Uri uri, String text) {
+        try (java.io.OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+            if (out != null) {
+                out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                DiagLog.d("app", "exported log to " + uri);
             }
         } catch (Exception e) {
-            Log.e(TAG, "save log failed", e);
+            Log.e(TAG, "write export failed", e);
+            Toast.makeText(this, e.toString(), Toast.LENGTH_SHORT).show();
         }
-        try {
-            startActivity(new Intent(android.app.DownloadManager.ACTION_VIEW_DOWNLOADS));
-        } catch (Exception e) {
-            Log.e(TAG, "open downloads failed", e);
-        }
+    }
+
+    /** Menu "Clear log": wipes the on-screen log, the saved run log and both
+     *  copies of the diagnostic log (external + device-protected). */
+    private void clearLogs() {
+        logBuffer.setLength(0);
+        binding.outputView.setText("");
+        if (lastLogFile != null && lastLogFile.exists()) lastLogFile.delete();
+        DiagLog.clear();
+        File deLog = new File(createDeviceProtectedStorageContext().getFilesDir(), "dfroot.log");
+        if (deLog.exists()) deLog.delete();
+        createDeviceProtectedStorageContext().getSharedPreferences("dfroot", MODE_PRIVATE)
+                .edit().putBoolean("last_run_success", false).apply();
+        updateLogVisibility();
+        DiagLog.d("app", "logs cleared");
+        Toast.makeText(this, R.string.log_cleared, Toast.LENGTH_SHORT).show();
     }
 
     private void runExploit() {
@@ -1482,8 +1633,10 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         boolean autoSoftReboot = sp.getBoolean("auto_soft_reboot", false);
         sp.edit().putBoolean("soft_reboot", autoSoftReboot).apply();
         lastFailReason = null;
+        DiagLog.d("run", "exploit start, su_manager=" + suManagerPkg);
         try {
             int rc = ExploitRunner.run(mDeCtx, this);
+            DiagLog.d("run", "exploit returned rc=" + rc);
             if (rc != 0) {
                 // 0 ok, 1 ksud/bootstrap error, 2 poll timeout or bad setup,
                 // 3 failed to patch files (see exp.c markers[]).
@@ -1525,6 +1678,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             StringBuilder out = new StringBuilder();
             try {
                 int rc = ExploitRunner.probe(mDeCtx, out::append);
+                DiagLog.d("probe", "probe rc=" + rc + " out=" + out);
                 mMain.post(() -> {
                     String verdict = rc == 0
                             ? getString(R.string.probe_ok)
@@ -1548,96 +1702,266 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         });
     }
 
-    /** Expert aid: a root shell served by the console daemon bootstrap forks.
-     *  The automatic `ksud late-load` only ever runs once and the root context
-     *  that drives it lives inside bootstrap, so without this a failed
-     *  late-load cannot be retried short of a full reroot. Commands are written
-     *  to dftty.cmd and the transcript is read back from dftty.out. */
-    private void showDebugConsole() {
-        if (!new File("/dev/df").exists()) {
-            Toast.makeText(this, R.string.root_required,
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        RootConsole console = new RootConsole(mDeCtx.getFilesDir());
-        console.reset();
+    /** The embedded terminal: a real pty-backed session (vendored Termux
+     *  terminal-emulator / terminal-view), not a line-based prompt. It runs an
+     *  interactive shell, so cwd/env/history and full-screen programs behave
+     *  normally. Opens as su when a root manager is present, else the app's sh;
+     *  the header lets the user switch shells and close. */
+    private void showTerminal() {
+        final android.app.Dialog dlg = new android.app.Dialog(this,
+                android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+        View content = getLayoutInflater().inflate(R.layout.dialog_terminal, null);
+        dlg.setContentView(content);
+        dlg.setCanceledOnTouchOutside(false);
+        DiagLog.d("term", "terminal opened");
 
-        View content = getLayoutInflater().inflate(R.layout.dialog_debug_console, null);
-        TextView output = content.findViewById(R.id.consoleOutput);
-        android.widget.ScrollView scroll = content.findViewById(R.id.consoleScroll);
-        android.widget.EditText input = content.findViewById(R.id.consoleInput);
-        View send = content.findViewById(R.id.consoleSend);
-        View dot = content.findViewById(R.id.consoleStatusDot);
-        View clear = content.findViewById(R.id.consoleClear);
-        TextView subtitle = content.findViewById(R.id.consoleSubtitle);
+        final com.termux.view.TerminalView tv = content.findViewById(R.id.terminalView);
+        mTermView = tv;
+        tv.setTerminalViewClient(new TerminalViewClientImpl(tv));
+        tv.setTextSize(mTermTextSize);
 
-        output.setText("");
-        final String ksudCmd = "/data/user_de/0/df.root/ksud late-load --package-name "
-                + (suManagerPkg != null ? suManagerPkg : "<pkg>");
-        input.setText(ksudCmd);
-        input.setSelection(input.getText().length());
-        subtitle.setText(suManagerPkg != null
-                ? "uid 0 · " + suManagerPkg : "uid 0 · no manager");
-
-        final androidx.appcompat.app.AlertDialog dialog =
-                new androidx.appcompat.app.AlertDialog.Builder(this).setView(content).create();
-
-        final boolean[] busy = {false};
-        Runnable submit = () -> {
-            String cmd = input.getText().toString().trim();
-            if (cmd.isEmpty() || busy[0]) return;
-            input.setText("");
-            output.append("$ " + cmd + "\n");
-            scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
-            busy[0] = true;
-            mExec.execute(() -> {
-                String res = console.run(cmd, 60000);
-                boolean alive = !res.startsWith("(no response");
-                mMain.post(() -> {
-                    output.append(res + "\n\n");
-                    scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
-                    dot.setBackgroundTintList(ColorStateList.valueOf(
-                            alive ? 0xFF7BD88F : 0xFFE5A663));
-                    busy[0] = false;
-                });
-            });
-        };
-
-        send.setOnClickListener(v -> {
+        content.findViewById(R.id.terminalClose).setOnClickListener(v -> dlg.dismiss());
+        content.findViewById(R.id.terminalRunRoot).setOnClickListener(v -> {
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            submit.run();
+            startTerminalSession(tv, "su");
         });
-        input.setOnEditorActionListener((v, actionId, event) -> {
-            submit.run();
-            return true;
-        });
-        clear.setOnClickListener(v -> {
+        content.findViewById(R.id.terminalRunSh).setOnClickListener(v -> {
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            output.setText("");
+            startTerminalSession(tv, "sh");
         });
-        content.findViewById(R.id.consoleChipId).setOnClickListener(v -> fillInput(input, "id"));
-        content.findViewById(R.id.consoleChipKsud).setOnClickListener(v -> fillInput(input, ksudCmd));
-        content.findViewById(R.id.consoleChipLs).setOnClickListener(v -> fillInput(input, "ls /data/adb"));
-        content.findViewById(R.id.consoleChipEnforce).setOnClickListener(v -> fillInput(input, "getenforce"));
 
-        dialog.setOnShowListener(d -> {
-            android.view.Window w = dialog.getWindow();
-            if (w == null) return;
-            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
-                    android.graphics.Color.TRANSPARENT));
-            w.setLayout((int) (getResources().getDisplayMetrics().widthPixels * 0.94f),
-                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
-            w.setSoftInputMode(android.view.WindowManager.LayoutParams
-                    .SOFT_INPUT_ADJUST_RESIZE);
+        // Never leave the pty shell running behind the app.
+        dlg.setOnDismissListener(d -> {
+            com.termux.terminal.TerminalSession s = tv.getCurrentSession();
+            if (s != null) s.finishIfRunning();
+            mTermView = null;
         });
-        dialog.show();
+        dlg.show();
+
+        android.view.Window w = dlg.getWindow();
+        if (w != null) w.setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+
+        // The view has no size before its first layout and a session only spawns
+        // its pty once updateSize() runs, so start the shell after layout.
+        tv.post(() -> {
+            if (daemonAvailable()) startRootPtySession(tv);
+            else startTerminalSession(tv, suCmdAvailable() ? "su" : "sh");
+        });
     }
 
-    private void fillInput(android.widget.EditText input, String cmd) {
-        input.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-        input.setText(cmd);
-        input.setSelection(input.getText().length());
-        input.requestFocus();
+    /** True when a root daemon from a successful exploit is actually running, so
+     *  a genuine root shell can be opened without su. /dev/df is created by a
+     *  successful run, but it is a tmpfs node that outlives the daemon, so the
+     *  daemon's heartbeat (refreshed about once a second) is what we trust. */
+    private boolean daemonAvailable() {
+        if (!new File("/dev/df").exists()) return false;
+        File hb = new File(mDeCtx.getFilesDir(), "dftty.alive");
+        return hb.exists() && System.currentTimeMillis() - hb.lastModified() < 5000;
+    }
+
+    /** Open the terminal as root by handing the exploit's root daemon a pty whose
+     *  slave it execs the shell on. termux.c only allocates the pty here, so the
+     *  shell - and thus uid 0 - comes from the daemon's process tree; root cannot
+     *  be setuid'd into our own process. Falls back to su/sh if the pty or daemon
+     *  is unavailable. */
+    private void startRootPtySession(com.termux.view.TerminalView tv) {
+        com.termux.terminal.TerminalSession old = tv.getCurrentSession();
+        if (old != null) old.finishIfRunning();
+
+        String[] ptsOut = new String[1];
+        int fd = com.termux.terminal.JNI.createPty(24, 80, ptsOut);
+        if (fd < 0 || ptsOut[0] == null) {
+            DiagLog.d("term", "createPty failed, falling back to su/sh");
+            startTerminalSession(tv, suCmdAvailable() ? "su" : "sh");
+            return;
+        }
+        DiagLog.d("term", "root pty pts=" + ptsOut[0] + " fd=" + fd);
+        requestDaemonShell(ptsOut[0]);
+
+        com.termux.terminal.TerminalSession session =
+                new com.termux.terminal.TerminalSession(fd, 2000, mTermClient);
+        tv.attachSession(session);
+        tv.requestFocus();
+        android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null)
+            imm.showSoftInput(tv, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    /** Hand the pty slave path to the root daemon through its command file; the
+     *  daemon forks an interactive root shell onto it. Sequence-tagged like the
+     *  other dftty commands so the daemon runs it exactly once. */
+    private void requestDaemonShell(String pts) {
+        File cmd = new File(mDeCtx.getFilesDir(), "dftty.cmd");
+        long seq = System.currentTimeMillis() & 0x7fffffff;
+        String line = "<<<pty:" + seq + ">>> " + pts + "\n";
+        try (FileOutputStream out = new FileOutputStream(cmd, false)) {
+            out.write(line.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            DiagLog.d("term", "requestDaemonShell failed: " + e);
+        }
+    }
+
+    /** (Re)starts the terminal on the given shell ("su" or "sh"), tearing down
+     *  the previous session first. cwd is "/" and a fuller PATH is exported so
+     *  interactive tools resolve like in a normal root shell. */
+    private void startTerminalSession(com.termux.view.TerminalView tv, String shell) {
+        com.termux.terminal.TerminalSession old = tv.getCurrentSession();
+        if (old != null) old.finishIfRunning();
+        com.termux.terminal.TerminalSession session = new com.termux.terminal.TerminalSession(
+                shell, "/", new String[] { shell }, terminalEnv(), 2000, mTermClient);
+        tv.attachSession(session);
+        tv.requestFocus();
+        android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null)
+            imm.showSoftInput(tv, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+    }
+
+    /** Environment for the pty shell. termux.c clears the environment and sets
+     *  only what we pass, so PATH must list every place a su/sh binary lives. */
+    private static String[] terminalEnv() {
+        return new String[] {
+                "TERM=xterm-256color",
+                "LANG=en_US.UTF-8",
+                "HOME=/",
+                "TMPDIR=/data/local/tmp",
+                "ANDROID_ROOT=/system",
+                "ANDROID_DATA=/data",
+                "PATH=/data/adb/ksu/bin:/data/adb/magisk:/debug_ramdisk:/sbin"
+                        + ":/system/sbin:/system/bin:/system/xbin:/odm/bin:/vendor/bin"
+                        + ":/product/bin:/data/local/tmp",
+        };
+    }
+
+    /** True when the device exposes a su binary (a root manager is installed and
+     *  this app may be granted); decides whether the terminal opens as su. */
+    private boolean suCmdAvailable() {
+        String mgr = mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE)
+                .getString("su_manager", "");
+        if (mgr != null && !mgr.isEmpty()) return true;
+        for (String c : new String[] { "/system/bin/su", "/system/xbin/su", "/sbin/su",
+                "/data/adb/ksu/bin/su", "/data/adb/magisk/su" }) {
+            if (new File(c).exists()) return true;
+        }
+        return false;
+    }
+
+    /** TerminalSessionClient for the embedded terminal: clipboard + diag logs. */
+    private final class TermClient implements com.termux.terminal.TerminalSessionClient {
+        @Override public void onTextChanged(com.termux.terminal.TerminalSession s) {
+            // TerminalView.draw() only runs on invalidate(); without this the
+            // screen stays stale until a touch/scroll forces a repaint.
+            if (mTermView != null) mTermView.onScreenUpdated();
+        }
+
+        @Override public void onTitleChanged(com.termux.terminal.TerminalSession s) { }
+
+        @Override public void onSessionFinished(com.termux.terminal.TerminalSession s) {
+            if (mTermView != null) mTermView.onScreenUpdated();
+            DiagLog.d("term", "session finished rc=" + s.getExitStatus());
+        }
+
+        @Override public void onCopyTextToClipboard(com.termux.terminal.TerminalSession s, String text) {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm != null)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("terminal", text));
+        }
+
+        @Override public void onPasteTextFromClipboard(com.termux.terminal.TerminalSession s) {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip()) return;
+            CharSequence text = cm.getPrimaryClip().getItemAt(0).coerceToText(MainActivity.this);
+            if (text != null && s != null) s.write(text.toString());
+        }
+
+        @Override public void onBell(com.termux.terminal.TerminalSession s) { }
+
+        @Override public void onColorsChanged(com.termux.terminal.TerminalSession s) { }
+
+        @Override public void onTerminalCursorStateChange(boolean state) { }
+
+        @Override public Integer getTerminalCursorStyle() { return null; }
+
+        @Override public void logError(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logWarn(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logInfo(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logDebug(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logVerbose(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logStackTraceWithMessage(String tag, String msg, Exception e) {
+            DiagLog.d("term", tag + ": " + msg + " " + e);
+        }
+        @Override public void logStackTrace(String tag, Exception e) { DiagLog.d("term", tag + ": " + e); }
+    }
+
+    /** TerminalViewClient for the embedded terminal: keyboard/gesture policy.
+     *  Minimal - back maps to ESC, taps raise the soft keyboard. */
+    private final class TerminalViewClientImpl implements com.termux.view.TerminalViewClient {
+        private final com.termux.view.TerminalView view;
+
+        TerminalViewClientImpl(com.termux.view.TerminalView view) { this.view = view; }
+
+        @Override public float onScale(float scale) {
+            // Pinch-to-zoom: rescale the font, clamped so the terminal stays usable.
+            int next = Math.round(mTermTextSize * scale);
+            next = Math.max(10, Math.min(40, next));
+            if (next != mTermTextSize) {
+                mTermTextSize = next;
+                final int size = next;
+                view.post(() -> view.setTextSize(size));
+            }
+            return 1.0f;
+        }
+
+        @Override public void onSingleTapUp(android.view.MotionEvent e) {
+            android.view.inputmethod.InputMethodManager imm =
+                    (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null)
+                imm.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+        }
+
+        @Override public boolean shouldBackButtonBeMappedToEscape() { return true; }
+
+        @Override public boolean shouldEnforceCharBasedInput() { return true; }
+
+        @Override public boolean shouldUseCtrlSpaceWorkaround() { return false; }
+
+        @Override public boolean isTerminalViewSelected() { return true; }
+
+        @Override public void copyModeChanged(boolean copyMode) { }
+
+        @Override public boolean onKeyDown(int keyCode, android.view.KeyEvent e,
+                com.termux.terminal.TerminalSession session) { return false; }
+
+        @Override public boolean onKeyUp(int keyCode, android.view.KeyEvent e) { return false; }
+
+        @Override public boolean onLongPress(android.view.MotionEvent event) { return false; }
+
+        @Override public boolean readControlKey() { return false; }
+
+        @Override public boolean readAltKey() { return false; }
+
+        @Override public boolean readShiftKey() { return false; }
+
+        @Override public boolean readFnKey() { return false; }
+
+        @Override public boolean onCodePoint(int codePoint, boolean ctrlDown,
+                com.termux.terminal.TerminalSession session) { return false; }
+
+        @Override public void onEmulatorSet() { }
+
+        @Override public void logError(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logWarn(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logInfo(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logDebug(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logVerbose(String tag, String msg) { DiagLog.d("term", tag + ": " + msg); }
+        @Override public void logStackTraceWithMessage(String tag, String msg, Exception e) {
+            DiagLog.d("term", tag + ": " + msg + " " + e);
+        }
+        @Override public void logStackTrace(String tag, Exception e) { DiagLog.d("term", tag + ": " + e); }
     }
 
     private void openUrl(String url) {

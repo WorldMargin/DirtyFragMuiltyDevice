@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = "df.root"
+    namespace = "com.worldmargin.dfroot"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "df.root"
+        applicationId = "com.worldmargin.dfroot"
         minSdk = 32
         targetSdk = 36
         versionCode = 31
@@ -21,9 +21,9 @@ android {
     signingConfigs {
         create("keystore") {
             storeFile = file("keystore.jks")
-            storePassword = "dirtyfrag"
-            keyAlias = "dirtyfrag"
-            keyPassword = "dirtyfrag"
+            storePassword = "worldmargin"
+            keyAlias = "worldmargin"
+            keyPassword = "worldmargin"
         }
     }
 
