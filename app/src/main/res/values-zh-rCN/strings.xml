@@ -8,9 +8,10 @@
     <!-- Support banner -->
     <string name="support_checking">正在检测设备支持…</string>
     <string name="support_supported">设备受支持 — 可在此运行 exploit</string>
-    <string name="support_unsupported">设备不受支持 — 无法在此运行 exploit</string>
+    <string name="support_patched">设备已修复 — 无法利用此漏洞</string>
     <string name="support_no_ko">设备可利用，但缺少 %1$s 的内核模块</string>
-    <string name="support_unknown">支持检测未能运行</string>
+    <string name="support_kmi_unparsed">设备可利用，但内核版本无法识别（非 GKI？）</string>
+    <string name="support_unknown">探测失败 — 原因未知（见日志）</string>
 
     <!-- SU Manager card -->
     <string name="su_manager_title">SU 管理器</string>

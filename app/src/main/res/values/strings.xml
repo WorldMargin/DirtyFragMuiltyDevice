@@ -8,9 +8,10 @@
     <!-- Support banner -->
     <string name="support_checking">Checking device support…</string>
     <string name="support_supported">Device supported — exploit can run here</string>
-    <string name="support_unsupported">Device not supported — exploit cannot work here</string>
+    <string name="support_patched">Device already patched — exploit cannot work here</string>
     <string name="support_no_ko">Vulnerable, but no bundled kernel module for %1$s</string>
-    <string name="support_unknown">Support check could not run</string>
+    <string name="support_kmi_unparsed">Vulnerable, but the kernel version is not recognized (non-GKI?)</string>
+    <string name="support_unknown">Probe failed — unknown reason (see log)</string>
 
     <!-- SU Manager card -->
     <string name="su_manager_title">SU Manager</string>

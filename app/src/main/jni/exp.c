@@ -351,7 +351,16 @@ static int patch_helper(void) {
  * block into crash_dump64's page cache at offset 16 - exactly the block whose
  * read-back decides "DEVICE NOT VULNERABLE" in patch_helper() - and verifies it.
  * On success the original block is written back so the probe leaves no trace.
- * Returns 0 when the primitive takes effect (device usable), 1 otherwise. */
+ *
+ * The verdict is returned through the exit code, which the app reads back:
+ *   PROBE_OK      primitive takes effect (device vulnerable / usable)
+ *   PROBE_PATCHED read-back mismatch: the write did not land -> kernel patched
+ *   PROBE_ERROR   the probe could not be exercised at all (open/read/write
+ *                 failed: missing file, permissions, SA setup, ...) -> unknown.
+ * PROBE_PATCHED deliberately avoids 1 and 2 so it can't be confused with
+ * PROBE_ERROR or main()'s setup-failure code. */
+enum { PROBE_OK = 0, PROBE_ERROR = 1, PROBE_PATCHED = 3 };
+
 static int probe(void) {
     const size_t off = 16;
     uint8_t orig[16], desired[16], got[16];
@@ -360,14 +369,14 @@ static int probe(void) {
     if (vfd < 0) {
         printf("probe: open %s failed: %s\n", kCrashDump, strerror(errno));
         printf("PROBE FAILED\n");
-        return 1;
+        return PROBE_ERROR;
     }
     ssize_t n = pread(vfd, orig, sizeof(orig), (off_t)off);
     close(vfd);
     if (n != 16) {
         printf("probe: read original failed (%zd)\n", n);
         printf("PROBE FAILED\n");
-        return 1;
+        return PROBE_ERROR;
     }
 
     for (int i = 0; i < 16; i++) desired[i] = (uint8_t)(0xA5 ^ (i * 7));
@@ -377,7 +386,7 @@ static int probe(void) {
     if (patch_file_cbc(kCrashDump, (char *)desired, 16, off, 0) != 0) {
         printf("probe: write failed\n");
         printf("PROBE FAILED\n");
-        return 1;
+        return PROBE_ERROR;
     }
 
     vfd = open(kCrashDump, O_RDONLY);
@@ -387,7 +396,7 @@ static int probe(void) {
     if (n != 16 || memcmp(got, desired, 16) != 0) {
         printf("probe: read-back mismatch\n");
         printf("PROBE FAILED\n");
-        return 1;
+        return PROBE_PATCHED;
     }
     printf("probe: read-back matches\n");
 
@@ -395,7 +404,7 @@ static int probe(void) {
         printf("probe: restore failed (page cache only, cleared on reboot)\n");
 
     printf("PROBE OK\n");
-    return 0;
+    return PROBE_OK;
 }
 
 static int patch_ko(void) {

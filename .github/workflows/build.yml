@@ -9,20 +9,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Reads the single-source KMI manifest so the build matrix can never drift
+  # from the module list the APK bundles (see app/src/main/assets/kmis.txt).
+  prepare:
+    name: KMI matrix
+    runs-on: ubuntu-latest
+    outputs:
+      kmis: ${{ steps.manifest.outputs.kmis }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: manifest
+        run: |
+          kmis=$(grep -E '^android' app/src/main/assets/kmis.txt | jq -R . | jq -s -c .)
+          echo "kmis=$kmis" >> "$GITHUB_OUTPUT"
+
   build-lkms:
     name: LKMs / ${{ matrix.kmi }}
+    needs: prepare
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        kmi:
-          - android12-5.10
-          - android13-5.10
-          - android13-5.15
-          - android14-5.15
-          - android14-6.1
-          - android15-6.6
-          - android16-6.12
-          - android17-6.18
+        kmi: ${{ fromJSON(needs.prepare.outputs.kmis) }}
     container:
       image: ghcr.io/ylarod/ddk-min:${{ matrix.kmi }}-20260828
       options: --privileged

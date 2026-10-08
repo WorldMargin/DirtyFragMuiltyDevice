@@ -6,15 +6,14 @@ ARCH      := aarch64
 ABI       := arm64-v8a
 ENGINE    := podman
 
-KMIS :=        \
-    android12-5.10  \
-    android13-5.10  \
-    android13-5.15  \
-    android14-5.15  \
-    android14-6.1   \
-    android15-6.6   \
-    android16-6.12  \
-    android17-6.18
+# Bundled-KMI manifest: the single source of truth, shared with
+# .github/workflows/build.yml, app/src/main/jni/CMakeLists.txt and
+# MainActivity.java. One "android<rel>-<major>.<minor>" per line.
+KMI_MANIFEST := app/src/main/assets/kmis.txt
+KMIS := $(shell awk '/^android/ {print $$1}' $(KMI_MANIFEST))
+ifeq ($(strip $(KMIS)),)
+$(error No KMIs parsed from $(KMI_MANIFEST))
+endif()
 
 DDK_WF      := .github/workflows/build.yml
 
@@ -30,7 +29,8 @@ APK_SRCS    := $(wildcard app/src/main/java/com/worldmargin/dfroot/*.java \
                                app/src/main/jni/*.c app/src/main/jni/*.h \
                                app/src/main/jni/*.S app/src/main/jni/*.inc \
                                app/src/main/res/layout/*.xml \
-                               app/src/main/res/values/*.xml) \
+                               app/src/main/res/values/*.xml \
+                               app/src/main/assets/*.txt) \
                    app/src/main/AndroidManifest.xml \
                    app/build.gradle.kts \
                    app/src/main/jni/CMakeLists.txt

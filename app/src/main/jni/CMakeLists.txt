@@ -27,16 +27,58 @@ add_custom_command(
 )
 add_custom_target(splicehelper_bin DEPENDS "${SPLICEHELPER}")
 
-set(KO_FILES
-    "${JNI_DIR}/ko/dfroot-android12-5.10.ko"
-    "${JNI_DIR}/ko/dfroot-android13-5.10.ko"
-    "${JNI_DIR}/ko/dfroot-android13-5.15.ko"
-    "${JNI_DIR}/ko/dfroot-android14-5.15.ko"
-    "${JNI_DIR}/ko/dfroot-android14-6.1.ko"
-    "${JNI_DIR}/ko/dfroot-android15-6.6.ko"
-    "${JNI_DIR}/ko/dfroot-android16-6.12.ko"
-    "${JNI_DIR}/ko/dfroot-android17-6.18.ko"
-)
+# --- Bundled-KMI manifest: the single source of truth, shared with the
+# Makefile, .github/workflows/build.yml and MainActivity.java. One
+# "android<rel>-<major>.<minor>" per line; blank lines and '#' comments are
+# ignored.
+set(KMI_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/../assets/kmis.txt")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KMI_MANIFEST}")
+
+file(STRINGS "${KMI_MANIFEST}" KMI_MANIFEST_LINES)
+set(KMIS "")
+foreach(line IN LISTS KMI_MANIFEST_LINES)
+    string(STRIP "${line}" line)
+    if(line MATCHES "^android[0-9]+-[0-9]+\\.[0-9]+$")
+        list(APPEND KMIS "${line}")
+    endif()
+endforeach()
+if(NOT KMIS)
+    message(FATAL_ERROR "No KMIs parsed from ${KMI_MANIFEST}")
+endif()
+
+set(KO_FILES "")
+foreach(kmi IN LISTS KMIS)
+    list(APPEND KO_FILES "${JNI_DIR}/ko/dfroot-${kmi}.ko")
+endforeach()
+
+# Guard: exp.c embeds the modules by hand. Fail the build if its .incbin set or
+# its select_ko_image() entry count drifts from the manifest, so we never ship
+# an APK that bundles a module it can't select (or claims one it lacks).
+file(READ "${JNI_DIR}/exp.c" EXP_C_SRC)
+string(REGEX MATCHALL "dfroot-android[0-9]+-[0-9]+\\.[0-9]+\\.ko" EXP_INCBIN "${EXP_C_SRC}")
+set(EXP_INCBIN_KMIS "")
+foreach(f IN LISTS EXP_INCBIN)
+    string(REGEX REPLACE "^dfroot-(.*)\\.ko$" "\\1" kmi "${f}")
+    list(APPEND EXP_INCBIN_KMIS "${kmi}")
+endforeach()
+list(SORT KMIS)
+list(SORT EXP_INCBIN_KMIS)
+if(NOT KMIS STREQUAL EXP_INCBIN_KMIS)
+    message(FATAL_ERROR
+        "KMI manifest vs exp.c mismatch.\n"
+        "  manifest (${KMI_MANIFEST}) : ${KMIS}\n"
+        "  exp.c .incbin             : ${EXP_INCBIN_KMIS}\n"
+        "Add/remove the module in both places (and its imgs[] entry).")
+endif()
+string(REGEX MATCHALL
+       "dfroot_ko_[0-9]+_[0-9]+_[0-9]+_start,[ ]+dfroot_ko_[0-9]+_[0-9]+_[0-9]+_end[}]"
+       EXP_IMGS "${EXP_C_SRC}")
+list(LENGTH KMIS KMI_COUNT)
+list(LENGTH EXP_IMGS IMGS_COUNT)
+if(NOT KMI_COUNT EQUAL IMGS_COUNT)
+    message(FATAL_ERROR
+        "exp.c select_ko_image() has ${IMGS_COUNT} entries but the manifest lists ${KMI_COUNT} KMIs.")
+endif()
 
 # AGP only packages lib*.so, so the executable is named libdfroot.so and lands
 # in the APK's native lib dir. The app execs it from nativeLibraryDir, which is

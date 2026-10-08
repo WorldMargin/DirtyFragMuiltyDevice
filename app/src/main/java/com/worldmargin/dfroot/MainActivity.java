@@ -37,6 +37,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -55,14 +56,18 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     /** GitHub API slug used for the release check. */
     private static final String API_REPO = "WorldMargin/DirtyFragMuiltyDevice";
 
-    /** Kernel-module matrix bundled in the APK, one row per dfroot-<kmi>.ko:
-     *  {androidRelease, kverMajor, kverMinor}. Mirrors exp.c select_ko_image()
-     *  and jni/ko/*.ko; P3.1 will data-ise this into a build-time manifest, so
-     *  keep both in sync until then. */
-    private static final int[][] BUNDLED_KO_KMIS = {
-            {12, 5, 10}, {13, 5, 10}, {13, 5, 15}, {14, 5, 15},
-            {14, 6, 1},  {15, 6, 6},  {16, 6, 12}, {17, 6, 18},
-    };
+    /** Verdicts read back from the native probe() exit code (see exp.c):
+     *  PROBE_OK the page-cache write primitive takes effect; PROBE_PATCHED the
+     *  write no longer lands (kernel patched); any other value means the probe
+     *  could not be exercised at all -> tracked as "unknown". */
+    private static final int PROBE_OK = 0;
+    private static final int PROBE_PATCHED = 3;
+
+    /** Bundled-KMI manifest shipped as an asset: the single source of truth for
+     *  which kernel modules the APK carries, shared with the Makefile, CI and
+     *  app/src/main/jni/CMakeLists.txt. One "android<rel>-<major>.<minor>" per
+     *  line; blank lines and '#' comments are ignored. */
+    private static final String KMI_MANIFEST_ASSET = "kmis.txt";
 
     private ActivityMainBinding binding;
     private final Handler mMain = new Handler(Looper.getMainLooper());
@@ -922,10 +927,12 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private void runSupportCheck() {
         if (running) return;
         setSupportBanner(R.string.support_checking, 0xFFB0B0B0);
+        final int[][] bundled = loadBundledKmis();
         final String release = kernelRelease();
         final int[] kmi = parseKmi(release);
         DiagLog.d("support", "kernel=" + release
-                + " kmi=" + (kmi == null ? "unparsed" : kmiLabel(kmi)));
+                + " kmi=" + (kmi == null ? "unparsed" : kmiLabel(kmi))
+                + " bundled=" + (bundled == null ? "unreadable" : bundled.length));
         mExec.execute(() -> {
             int rc;
             try {
@@ -939,15 +946,47 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             final int r = rc;
             DiagLog.d("support", "probe rc=" + r);
             mMain.post(() -> {
-                if (r != 0) {
-                    setSupportBanner(R.string.support_unsupported, 0xFFE57373);
-                } else if (kmi != null && !kmiCovered(kmi)) {
+                if (r == PROBE_PATCHED) {
+                    setSupportBanner(R.string.support_patched, 0xFFE57373);
+                } else if (r != PROBE_OK) {
+                    // Probe couldn't be exercised (I/O, permissions, SA setup…):
+                    // kept distinct from "already patched" so the banner is honest.
+                    setSupportBanner(R.string.support_unknown, 0xFFE5A663);
+                } else if (bundled == null) {
+                    setSupportBanner(R.string.support_unknown, 0xFFE5A663);
+                } else if (kmi == null) {
+                    // Vulnerable, but the release doesn't parse as GKI: exp.c
+                    // bails in patch_ko(), so this is usable-but-unrootable. Not
+                    // "supported" (that was a false positive before).
+                    setSupportBanner(R.string.support_kmi_unparsed, 0xFFE5A663);
+                } else if (!kmiCovered(kmi, bundled)) {
                     setSupportBanner(getString(R.string.support_no_ko, kmiLabel(kmi)), 0xFFE5A663);
                 } else {
                     setSupportBanner(R.string.support_supported, 0xFF7BD88F);
                 }
             });
         });
+    }
+
+    /** Parses the bundled-KMI manifest asset into {androidRelease, major, minor}
+     *  rows, or null when the manifest can't be read. */
+    private int[][] loadBundledKmis() {
+        List<int[]> rows = new ArrayList<>();
+        Matcher m = Pattern.compile("^\\s*android(\\d+)-(\\d+)\\.(\\d+)").matcher("");
+        try (BufferedReader r = new BufferedReader(
+                new InputStreamReader(getAssets().open(KMI_MANIFEST_ASSET)))) {
+            for (String line; (line = r.readLine()) != null; ) {
+                m.reset(line);
+                if (!m.find()) continue;
+                rows.add(new int[]{ Integer.parseInt(m.group(1)),
+                                    Integer.parseInt(m.group(2)),
+                                    Integer.parseInt(m.group(3)) });
+            }
+        } catch (Exception e) {
+            DiagLog.e("support", "read " + KMI_MANIFEST_ASSET + " failed", e);
+            return null;
+        }
+        return rows.toArray(new int[0][]);
     }
 
     /** Kernel release string, e.g. "6.1.145-android14-11-maybe-dirty". Reads
@@ -989,9 +1028,9 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     /** Mirrors exp.c select_ko_image(): covered when a bundled module matches
      *  the device's major.minor (android release preferred); any module with
      *  the same major.minor is accepted as the fallback the exploit would use. */
-    private static boolean kmiCovered(int[] kmi) {
+    private static boolean kmiCovered(int[] kmi, int[][] bundled) {
         boolean sameMajorMinor = false;
-        for (int[] ko : BUNDLED_KO_KMIS) {
+        for (int[] ko : bundled) {
             if (ko[1] != kmi[1] || ko[2] != kmi[2]) continue;
             if (ko[0] == kmi[0]) return true;
             sameMajorMinor = true;
