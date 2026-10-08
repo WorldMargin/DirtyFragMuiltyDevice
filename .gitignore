@@ -46,3 +46,5 @@ app/src/main/jni/tests/dftty_test
 
 # staged release APK for the GitHub release asset
 /release/
+dirtyfrag_diag_log.txt
+KERNEL_SUPPORT.md

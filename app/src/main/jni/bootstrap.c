@@ -157,6 +157,33 @@ static void touch(const char *path)
         close(fd);
 }
 
+/* Marker nodes (see exp.c markers[]) are created by the LKM's shell and by this
+ * bootstrap, and are never removed - so after a failed run the app reads the
+ * previous run's markers as if they were fresh, and reports "mutex acquired"
+ * for a run that never got past the O_EXCL open. Clear them on failure.
+ *
+ * /dev/df is special: the shellcode creates it O_CREAT|O_EXCL as a one-shot
+ * mutex, and the app also treats its existence as the "rooted" signal. On
+ * failure it must be dropped or every later run silently no-ops at the mutex
+ * until the device reboots (/dev is tmpfs, so a framework soft-reboot does not
+ * clear it). bootstrap is the only root context this flow ever gets, hence the
+ * only place able to unlink it. Best-effort: if SELinux still denies the
+ * unlink the run is unusable anyway. */
+static void clear_markers(void)
+{
+    static const char *const marks[] = {
+        "/dev/df",    "/dev/dfmc",  "/dev/dfm0",  "/dev/dfms",
+        "/dev/dfh0",  "/dev/dfh1",  "/dev/dfh2",  "/dev/dfh3",
+        "/dev/dfh4",  "/dev/dfh5",  "/dev/dfh6",
+        "/dev/dfmrok", "/dev/dfmre", "/dev/dfme0",
+        "/dev/dfm1",  "/dev/dfm7",  "/dev/dfmw0", "/dev/dfm2",
+        "/dev/dfm8",  "/dev/dfmw1", "/dev/dfm3",  "/dev/dfmw2",
+        "/dev/dfm4",  "/dev/dfm5",  "/dev/dfme1",
+    };
+    for (size_t i = 0; i < sizeof(marks) / sizeof(marks[0]); i++)
+        unlink(marks[i]);
+}
+
 /* Mark every installed module disabled before ksud runs. A broken module
  * otherwise loads on the next boot and bootloops the device. */
 static int disable_modules(void)
@@ -205,6 +232,7 @@ int main(void)
                    &soft_reboot, &disable_mods) != 0) {
         dflog("boot", "read prefs failed (%s)", PREFS_PATH);
         touch("/dev/dfme0");
+        clear_markers();
         return 1;
     }
     touch("/dev/dfm1");
@@ -251,6 +279,7 @@ int main(void)
     } else {
         touch("/dev/dfme1");
         dflog("boot", "ksud late-load failed rc=%d", rc);
+        clear_markers();
     }
 
     return 0;
